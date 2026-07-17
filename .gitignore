@@ -1,0 +1,9 @@
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+.DS_Store
+.devlocal/
+.playwright-mcp/
+graphify-out/

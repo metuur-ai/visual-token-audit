@@ -1,0 +1,6 @@
+# local/ephemeral artifacts
+.playwright-mcp/
+.devlocal/
+.claude/settings.local.json
+*.png
+*.log

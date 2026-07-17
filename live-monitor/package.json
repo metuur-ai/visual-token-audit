@@ -1,0 +1,34 @@
+{
+  "name": "@metuur/claude-live-monitor",
+  "version": "0.1.0",
+  "description": "Zero-dependency live monitor for Claude Code session transcripts (HTTP + SSE dashboard).",
+  "type": "module",
+  "bin": {
+    "claude-live-monitor": "bin/cli.js"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md",
+    "CONTRACT.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "bun run collector.ts",
+    "build": "bun build collector.ts --target node --outfile dist/collector.js && rm -rf dist/public && cp -r public dist/public",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "monitor",
+    "tokens",
+    "sse"
+  ],
+  "license": "MIT"
+}
