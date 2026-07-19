@@ -1,8 +1,8 @@
 // Integration guard for the /api/projects addition (Units 1.1/1.2/1.3/2.1).
 // Boots collector.ts as a subprocess on a throwaway port and asserts:
 //   - /api/projects returns 200 + application/json; charset=utf-8 (R-1.1)
-//   - its envelope is {projects, startedAt}, startedAt === /api/snapshot's (R-1.12)
-//   - query params are ignored (R-1.15)
+//   - its envelope is {projects, startedAt, days}, startedAt === /api/snapshot's (R-1.12)
+//   - ?days=N is honored, clamped 1..60, default 30 (disk-scan window)
 //   - existing endpoints keep their unchanged content-types (R-1.11 additive guard)
 //   - missing page files return 503, not 404 (R-2.3)
 // Zero-dependency: bun test + fetch. Skips gracefully if the port can't bind.
@@ -44,17 +44,23 @@ test("R-1.1 /api/projects → 200 + application/json; charset=utf-8", async () =
   expect(Array.isArray(body.projects)).toBe(true);
 });
 
-test("R-1.12 envelope {projects, startedAt}; startedAt === /api/snapshot", async () => {
+test("R-1.12 envelope {projects, startedAt, days}; startedAt === /api/snapshot", async () => {
   const proj = await (await fetch(`${BASE}/api/projects`)).json();
   const snap = await (await fetch(`${BASE}/api/snapshot`)).json();
-  expect(Object.keys(proj).sort()).toEqual(["projects", "startedAt"]);
+  expect(Object.keys(proj).sort()).toEqual(["days", "projects", "startedAt"]);
   expect(proj.startedAt).toBe(snap.startedAt);
+  expect(proj.days).toBe(30); // default window
 });
 
-test("R-1.15 query params ignored (byte-equal)", async () => {
-  const a = await (await fetch(`${BASE}/api/projects`)).text();
-  const b = await (await fetch(`${BASE}/api/projects?days=1&x=2`)).text();
-  expect(a).toBe(b);
+test("?days=N honored and clamped to 1..60", async () => {
+  const d1 = await (await fetch(`${BASE}/api/projects?days=1`)).json();
+  expect(d1.days).toBe(1);
+  const d60 = await (await fetch(`${BASE}/api/projects?days=60`)).json();
+  expect(d60.days).toBe(60);
+  // over-max clamps down to 60, sub-min clamps up to 1, garbage → default 30
+  expect((await (await fetch(`${BASE}/api/projects?days=999`)).json()).days).toBe(60);
+  expect((await (await fetch(`${BASE}/api/projects?days=0`)).json()).days).toBe(1);
+  expect((await (await fetch(`${BASE}/api/projects?days=abc`)).json()).days).toBe(30);
 });
 
 test("R-1.11 existing endpoints keep their content-types (additive)", async () => {

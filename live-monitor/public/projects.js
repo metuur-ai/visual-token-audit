@@ -86,8 +86,9 @@ function App() {
   const [data, setData] = useState(null);
   const [err, setErr] = useState(null);
   const [stale, setStale] = useState(false);
+  const [days, setDays] = useState(30);
 
-  const load = () => fetch('/api/projects')
+  const load = () => fetch('/api/projects?days=' + days)
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(d => { setData(d); setErr(null); setStale(false); })
     .catch(e => { setErr(String(e.message || e)); if (data) setStale(true); });
@@ -96,12 +97,17 @@ function App() {
     load();
     const t = setInterval(load, REFRESH_MS);
     return () => clearInterval(t);
-  }, []);
+  }, [days]);
 
   const top = html`<header class="top">
     <span class="logo">projects</span>
     <${Nav} />
-    <span class="gen">${data ? `${data.projects.length} project${data.projects.length === 1 ? '' : 's'}` : ''}</span>
+    <span class="gen">${data ? `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} · last ${data.days || days} days` : ''}</span>
+    <div class="seg">
+      <button class=${days === 7 ? 'on' : ''} onClick=${() => setDays(7)}>7d</button>
+      <button class=${days === 30 ? 'on' : ''} onClick=${() => setDays(30)}>30d</button>
+      <button class=${days === 60 ? 'on' : ''} onClick=${() => setDays(60)}>60d</button>
+    </div>
     <span class="live ${err && !data ? 'err' : ''}">${err ? 'stale' : 'auto 60s'}</span>
   </header>`;
 
@@ -118,7 +124,7 @@ function App() {
 
   if (!data.projects.length) return html`${top}<main><div class="state">
     <div class="big-msg">no projects yet</div>
-    <div>no sessions have been ingested in this run — start a Claude Code session and they'll appear here.</div>
+    <div>no sessions found in the last ${data.days || days} days — start a Claude Code session and they'll appear here.</div>
   </div></main>`;
 
   return html`${top}<main>
