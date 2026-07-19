@@ -14,6 +14,7 @@ import { homedir } from "os";
 import { createServer } from "http";
 import { Readable } from "stream";
 import { fileURLToPath } from "url";
+import { foldProjects } from "./projects.ts";
 
 // ----------------------------------------------------------------------------
 // Config
@@ -1604,6 +1605,18 @@ interface ObsTrigger {
   at: string;
   by: string;
 }
+// Full decomposition of a node's peak context window (`ctx`). All measured from
+// transcript usage/bytes except `base` (derived from the turn-1 window floor)
+// and `prompts` (residual). Segments sum to `ctx` when nothing was compacted;
+// `overflow` records cumulative history that has been evicted out of the window.
+interface CtxBreakdown {
+  ctx: number;         // peak window = input + cacheRead + cacheWrite (ground truth)
+  base: number;        // system prompt + tool schemas + memory/CLAUDE.md — turn-1 floor
+  assistant: number;   // Σ usage.output — assistant text + tool-call JSON (measured)
+  toolResults: number; // Σ resultBytes/4 — file reads, bash, skill bodies, sub-agent reports (measured)
+  prompts: number;     // ctx − base − assistant − toolResults (user input + estimation slack)
+  overflow: number;    // max(0, measured − ctx) — history compacted/evicted out of window
+}
 interface ObsNode {
   id: string;
   type: "session" | "agent";
@@ -1621,6 +1634,8 @@ interface ObsNode {
   tools: Record<string, number>;
   pre: ObsResource[];
   dyn: ObsTrigger[];
+  ctxBreakdown?: CtxBreakdown; // full window decomposition (spec §7.5)
+  toolTokens?: Record<string, number>; // tool/skill/agent name → Σ result tokens (bytes/4)
 }
 
 const OBS_CAP = 200_000;
@@ -1656,6 +1671,70 @@ function obsSelf(lns: SessionLine[]) {
       ? lastMs - firstMs
       : undefined;
   return { selfTok, cost, ctx, turns, tools, dur };
+}
+
+// Full context-window decomposition for one node's own lines. See CtxBreakdown.
+// `base` is the turn-1 window (system + tools + memory) minus that turn's own
+// user prompt; the remaining buckets accumulate across the node's turns and the
+// residual `prompts` absorbs user input we can't size precisely (prompt text is
+// clipped in the transcript) plus cache/estimation slack.
+function obsBreakdown(
+  lns: SessionLine[],
+  resultFor: Map<string, { ts: number; bytes: number }>,
+): CtxBreakdown {
+  let ctx = 0;
+  let firstCtx = 0;
+  let firstPromptTok = 0;
+  let assistant = 0;
+  let toolResults = 0;
+  let sawTurn = false;
+  let sawPrompt = false;
+  const seenResult = new Set<string>(); // avoid double-counting a shared tool_result
+  for (const ln of lns) {
+    if (ln.kind === "prompt" && !sawPrompt) {
+      firstPromptTok = estTok(ln.text);
+      sawPrompt = true;
+    }
+    if (ln.kind === "tool_result" && ln.toolResultFor) {
+      if (!seenResult.has(ln.toolResultFor)) {
+        seenResult.add(ln.toolResultFor);
+        toolResults += Math.round((ln.resultBytes ?? 0) / 4);
+      }
+    }
+    if (ln.kind !== "assistant" || !ln.usage) continue;
+    assistant += ln.usage.output;
+    const w = ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite;
+    ctx = Math.max(ctx, w);
+    if (!sawTurn) {
+      firstCtx = w;
+      sawTurn = true;
+    }
+  }
+  const base = Math.max(0, firstCtx - firstPromptTok);
+  const measured = base + assistant + toolResults;
+  const prompts = Math.max(0, ctx - measured);
+  const overflow = Math.max(0, measured - ctx);
+  return { ctx, base, assistant, toolResults, prompts, overflow };
+}
+
+// Runtime tokens returned by each tool/skill/agent = its tool_result byte size /4.
+// Keyed by display name (skill/agent name, else the raw tool name).
+function obsToolTokens(
+  lns: SessionLine[],
+  resultFor: Map<string, { ts: number; bytes: number }>,
+): Record<string, number> {
+  const out: Record<string, number> = {};
+  for (const ln of lns) {
+    if (ln.kind !== "assistant") continue;
+    for (const tu of ln.toolUses) {
+      if (!tu.id) continue;
+      const r = resultFor.get(tu.id);
+      if (!r || !r.bytes) continue;
+      const { name } = toolNodeKind(tu);
+      out[name] = (out[name] ?? 0) + Math.round(r.bytes / 4);
+    }
+  }
+  return out;
 }
 
 // Map an AutoLoad classification to an ObsKind (identical names, typed).
@@ -1795,6 +1874,8 @@ function buildObserveSnapshot(sessionId: string): string | null {
     tools: rootSelf.tools,
     pre: rootPre,
     dyn: obsDyn(main, "main", resultFor),
+    ctxBreakdown: obsBreakdown(main, resultFor),
+    toolTokens: obsToolTokens(main, resultFor),
   };
   const nodes: ObsNode[] = [root];
 
@@ -1825,6 +1906,8 @@ function buildObserveSnapshot(sessionId: string): string | null {
       // (legacy inline chains rarely carry reminders — usually empty there).
       pre: buildPre(chain.lines),
       dyn: obsDyn(chain.lines, name, resultFor),
+      ctxBreakdown: obsBreakdown(chain.lines, resultFor),
+      toolTokens: obsToolTokens(chain.lines, resultFor),
     });
     root.dyn.push({ k: "agent", n: name, tk: self.selfTok, at, by: "main" });
   };
@@ -2311,6 +2394,12 @@ const server = startServer({
     if (path === "/stats.js") {
       return serveStatic("stats.js", "text/javascript; charset=utf-8");
     }
+    if (path === "/projects" || path === "/projects.html") {
+      return serveStatic("projects.html", "text/html; charset=utf-8");
+    }
+    if (path === "/projects.js") {
+      return serveStatic("projects.js", "text/javascript; charset=utf-8");
+    }
     if (path.startsWith("/vendor/")) {
       // Vendored ESM modules (preact/htm). Name-only — no traversal.
       const f = path.slice("/vendor/".length);
@@ -2320,6 +2409,15 @@ const server = startServer({
     }
     if (path === "/api/snapshot") {
       return new Response(snapshotJSON(), {
+        headers: { "Content-Type": "application/json; charset=utf-8" },
+      });
+    }
+    if (path === "/api/projects") {
+      // Parameterless (R-1.15): fold the in-memory sessions map into project
+      // records. Pure in-memory read, no disk access (R-1.9). Envelope
+      // {projects, startedAt} with startedAt mirroring /api/snapshot (R-1.12).
+      const json = JSON.stringify(foldProjects(sessions.values(), startedAt));
+      return new Response(json, {
         headers: { "Content-Type": "application/json; charset=utf-8" },
       });
     }
