@@ -78,7 +78,7 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
 
 ## Unit 3: Header nav integration across all pages
 
-- [ ] 3.1 Add the "Projects" nav link across all four pages with correct active-marking (deps: 4.1, est: ~25m) (mutex: nav-shared-files)
+- [x] 3.1 Add the "Projects" nav link across all four pages with correct active-marking (deps: 4.1, est: ~25m) (mutex: nav-shared-files)
   - why: Make the Projects page discoverable from every page and keep the hand-duplicated nav consistent — identical link set/hrefs across pages, differing only in which single link is `class="on"`. Done last so the target page exists and each nav points at a real route; edits `index.html`, `observe.js`, `stats.js`, and the new `projects.js` nav.
   - acceptance:
     - R-3.1 — "THE SYSTEM SHALL render a \"Projects\" nav link pointing to `/projects` in the header nav of the Dashboard, Observe, Stats, and Projects pages."

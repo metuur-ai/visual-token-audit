@@ -54,8 +54,11 @@ const toolTotal = n => Object.values(n.tools || {}).reduce((a, b) => a + b, 0);
 
 /* ============================ model ============================ */
 /* /api/observe/<id> → { v, cap, generatedAt, session:{sessionId,project,cwd,firstTs,lastTs,prompts},
-   nodes:[{id,type,name,label,model,parentId,start,dur,selfTok,cost,ctx,turns,tools,pre[],dyn[]}],
-   waste:{preTotal,observableTotal,wasted,wastePct,turnCount} } */
+   nodes:[{id,type,name,label,model,parentId,start,dur,selfTok,cost,ctx,turns,tools,pre[],dyn[],
+           ctxBreakdown:{ctx,base,assistant,toolResults,prompts,overflow}, toolTokens:{<name>:tk}}],
+   waste:{preTotal,observableTotal,wasted,wastePct,turnCount} }
+   ctxBreakdown reconciles the whole window: base(system+tools+memory) + toolResults + assistant + prompts = ctx.
+   toolTokens attributes tool_result bytes/4 back to the tool that produced them (Read, Bash, Explore, …). */
 function buildModel(data) {
   const byId = {};
   (data.nodes || []).forEach(n => { byId[n.id] = { ...n, pre: n.pre || [], dyn: n.dyn || [], tools: n.tools || {}, children: [] }; });
@@ -100,6 +103,7 @@ function buildModel(data) {
 /* registry fusion (spec §4.6): declared catalogue (root pre) ⨝ fired events (dyn across tree) + tool tallies */
 function registryRows(m, kind) {
   const tally = name => { let c = 0; m.walk(m.root, nd => { c += (nd.tools || {})[name] || 0; }); return c; };
+  const tokensOf = name => { let t = 0; m.walk(m.root, nd => { t += (nd.toolTokens || {})[name] || 0; }); return t; };
   const events = [];
   m.walk(m.root, nd => (nd.dyn || []).forEach(d => { if (d.k === kind) events.push(d); }));
 
@@ -141,8 +145,9 @@ function registryRows(m, kind) {
       if ((kind === 'mcp') === isMcp) names.add(t);
     }));
     names.forEach(t => push(t, [], tally(t)));
+    rows.forEach(r => { r.resultTk = tokensOf(r.name); });   // tool_result bytes/4 rolled up across the tree
   }
-  return rows.sort((a, b) => (b.descTk + b.bodyTk) - (a.descTk + a.bodyTk) || b.calls - a.calls);
+  return rows.sort((a, b) => (b.descTk + b.bodyTk + (b.resultTk || 0)) - (a.descTk + a.bodyTk + (a.resultTk || 0)) || b.calls - a.calls);
 }
 
 /* ============================ components ============================ */
@@ -255,14 +260,50 @@ function TreeNode({ node, m, sel, onSel, open, toggle }) {
 }
 
 function ContextPanel({ n, m }) {
+  const cap = m.cap;
+  const buf = n === m.root ? AUTOCOMPACT_BUF : 0;
+  const cb = n.ctxBreakdown;
+
+  /* new model: every token reconciled to ctx = base + toolResults + assistant + prompts (spec §2.1) */
+  if (cb && cb.ctx) {
+    const ctx = cb.ctx || 0;
+    const free = Math.max(0, cap - ctx - buf);
+    const pre = sum(n.pre, p => p.tk);   // enumerated harness — a labelled subset of `base`
+    const segs = [
+      ['#6b7280', cb.base], ['#f97316', cb.toolResults], ['#db2777', cb.assistant],
+      ['#2563eb', cb.prompts], ['#f59e0b', buf], ['#e5e3de', free],
+    ];
+    const legend = [
+      ['#6b7280', 'system + tools + memory'], ['#f97316', 'tool results'], ['#db2777', 'assistant'],
+      ['#2563eb', 'prompts + slack'], ...(buf ? [['#f59e0b', 'autocompact']] : []), ['#e5e3de', 'free'],
+    ];
+    const rows = [
+      ['System + tools + memory', cb.base, '#6b7280', 'base floor before your first prompt — system prompt, tool schemas, CLAUDE.md'],
+      ['Tool results', cb.toolResults, '#f97316', 'file reads · bash output · skill bodies · sub-agent reports'],
+      ['Assistant output', cb.assistant, '#db2777', 'model replies + tool-call JSON (measured)'],
+      ['Prompts + slack', cb.prompts, '#2563eb', 'your messages + estimation slack'],
+      ...(buf ? [['Autocompact buffer', buf, '#f59e0b', 'reserved headroom before auto-compaction']] : []),
+      ['Free space', free, '#d6d4ce', 'unused window'],
+    ];
+    return html`<section class="panel fade">
+      <div class="ph"><span class="pt">Context window</span><span class="psub">${n.model || ''}</span></div>
+      <div class="big">${fmt(ctx)} <span>/ ${fmt(cap)} (${Math.round(ctx / cap * 100)}%)</span>
+        <div class="psub" style="margin-top:2px">this agent's own window · every token reconciled to ctx</div></div>
+      <div class="stack">${segs.map(([c, v]) => html`<div style="width:${v / cap * 100}%;background:${c}"></div>`)}</div>
+      <div class="legend">${legend.map(([c, l]) => html`<span><i style="background:${c}"></i>${l}</span>`)}</div>
+      ${cb.overflow ? html`<div class="lp-d" style="color:#b45309;margin-top:6px">⚠ ${fmt(cb.overflow)} tokens of earlier history compacted/evicted — measured usage exceeds the live window by this much.</div>` : null}
+      <div class="rows">${rows.map(([k, v, c, d]) => html`<div class="row"><span class="k" title=${d || ''}>${k}</span><span class="v num">${fmt(v)}</span><span class="bar"><i style="width:${Math.min(100, v / cap * 100)}%;background:${c}"></i></span></div>`)}</div>
+      ${cb.base ? html`<div class="lp-d" style="margin-top:8px">Of the ${fmt(cb.base)} base floor, ~${fmt(pre)} is enumerated in the registry below; the remainder is the base system prompt + tool schemas the transcript doesn't itemize.</div>` : null}
+    </section>`;
+  }
+
+  /* legacy fallback: older payloads without ctxBreakdown — residual "messages" catch-all */
   const pre = sum(n.pre, p => p.tk);
   const dyn = sum(n.dyn, d => d.tk);
   const sys = sum((n.pre || []).filter(p => p.k === 'system'), p => p.tk);
   const harness = Math.max(0, pre - sys);
   const ctx = n.ctx || 0;
   const msgs = Math.max(0, ctx - pre - dyn);
-  const buf = n === m.root ? AUTOCOMPACT_BUF : 0;
-  const cap = m.cap;
   const free = Math.max(0, cap - ctx - buf);
   const segs = [['#9ca3af', sys], ['#eab308', harness], ['#2563eb', dyn], ['#60a5fa', msgs], ['#f59e0b', buf], ['#e5e3de', free]];
   const legend = [['#9ca3af', 'system'], ['#eab308', 'preloaded harness'], ['#2563eb', 'invoked'], ['#60a5fa', 'messages'], ['#f59e0b', 'autocompact'], ['#e5e3de', 'free']];
@@ -304,7 +345,7 @@ function RegistryPanel({ m, reg, setReg }) {
     : isSkill
     ? ['Skill', 'Description (always loaded)', 'Body (on invoke)', 'Status', 'Invoked by', 'First load']
     : isTool
-    ? [reg === 'mcp' ? 'MCP tool' : 'Tool', 'Preloaded', 'Calls', 'Status', 'Called by', 'First use']
+    ? [reg === 'mcp' ? 'MCP tool' : 'Tool', 'Preloaded', 'Result tokens', 'Status', 'Called by', 'First use']
     : ['Resource', 'Preloaded', 'Runtime tokens', 'Status', 'Triggered by', 'First use'];
   return html`<section class="panel fade">
     <div class="ph"><span class="pt">Resource registry</span><span class="psub">what was available · what was actually touched · session-scoped</span></div>
@@ -320,7 +361,7 @@ function RegistryPanel({ m, reg, setReg }) {
       return html`<tr class=${r.used ? '' : 'waste'}>
         <td><span class="b b-${reg}">${reg}</span> <b>${r.name}</b>${r.runtimeOnly ? html` <span class="mut">· runtime only</span>` : null}</td>
         <td class="r num mut">${isAgent ? (r.calls || '—') : (r.descTk ? (r.est ? '~' : '') + fmt(r.descTk) : '—')}</td>
-        <td class="r num">${isAgent ? fmt(r.bodyTk) : isTool ? (r.calls || '—') : (r.bodyTk ? fmt(r.bodyTk) : '—')}</td>
+        <td class="r num">${isAgent ? fmt(r.bodyTk) : isTool ? (r.resultTk ? fmt(r.resultTk) : '—') : (r.bodyTk ? fmt(r.bodyTk) : '—')}</td>
         <td>${r.used
           ? html`<span class="ok">✓ ${isAgent ? 'dispatched ×' + r.calls : isTool ? 'used' + (r.calls ? ' ×' + r.calls : '') : 'invoked ×' + (r.hits.length || r.calls)}</span>`
           : html`<span class="warn">✗ never used</span>${r.descTk ? html` <span class="mut">· ${fmt(r.descTk)} tok/turn wasted</span>` : null}`}</td>
@@ -400,6 +441,11 @@ function UsagePanel({ n, m, scope }) {
   const kinds = {};
   (n.pre || []).forEach(p => { (kinds[p.k] = kinds[p.k] || { pre: 0, dyn: 0 }).pre += p.tk || 0; });
   nodes.forEach(x => (x.dyn || []).forEach(d => { (kinds[d.k] = kinds[d.k] || { pre: 0, dyn: 0 }).dyn += d.tk || 0; }));
+  // tool_result payloads counted as invoked tokens for their tool/mcp kind (spec §4.6)
+  nodes.forEach(x => Object.entries(x.toolTokens || {}).forEach(([name, tk]) => {
+    const k = name.startsWith('mcp__') ? 'mcp' : 'tool';
+    (kinds[k] = kinds[k] || { pre: 0, dyn: 0 }).dyn += tk || 0;
+  }));
   const krows = KORDER.filter(k => kinds[k]).map(k => [k, kinds[k]]);
   const kmax = Math.max(1, ...krows.map(([, v]) => v.pre + v.dyn));
   // per-model selfTok
@@ -565,6 +611,7 @@ function App() {
       <a href="/">Dashboard</a>
       <a href="/observe" class="on">Observe</a>
       <a href="/stats">Stats</a>
+      <a href="/projects">Projects</a>
     </nav>
     <span class="tstat"><span class="l">agents</span><span class="v num">${R ? R.agents : '—'}</span></span>
     <span class="tstat"><span class="l">tokens</span><span class="v num">${R ? fmt(R.tok) : '—'}</span></span>
