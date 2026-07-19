@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Projects</title>
+<style>
+:root{
+  --bg:#fcfcfb; --panel:#fff; --panel-2:#f7f7f5; --panel-3:#f1f1ee;
+  --line:#e4e3df; --line-2:#efeeea;
+  --txt:#1b1b19; --dim:#67655f; --faint:#9d9b94;
+  --blue:#1d4ed8; --green:#15803d; --amber:#b45309; --red:#b91c1c;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html{-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--txt);font-family:ui-monospace,'JetBrains Mono',SFMono-Regular,Menlo,monospace;font-size:12.5px;line-height:1.5}
+button{font:inherit;color:inherit;background:none;border:none;cursor:pointer}
+a{color:inherit;text-decoration:none}
+::selection{background:#dbeafe}
+.num{font-variant-numeric:tabular-nums}
+
+/* ---------- top bar ---------- */
+.top{position:sticky;top:0;z-index:20;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:26px;padding:0 18px;height:56px}
+.logo{font-weight:700;font-size:15px;color:var(--blue);letter-spacing:-.03em;white-space:nowrap}
+.nav{display:flex;gap:2px;margin-left:6px}
+.nav a{font-size:11px;color:var(--dim);padding:4px 9px;border-radius:5px}
+.nav a:hover{background:var(--panel-2);color:var(--txt)}
+.nav a.on{background:#eff5ff;color:var(--blue);font-weight:600}
+.gen{margin-left:auto;font-size:10px;color:var(--faint)}
+.seg{display:flex;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+.seg button{font-size:10px;padding:4px 9px;color:var(--dim)}
+.seg button:hover{background:var(--panel-2)}
+.seg button.on{background:#eff5ff;color:var(--blue);font-weight:600}
+.live{font-size:11px;color:var(--dim);display:flex;align-items:center;gap:6px}
+.live::before{content:'';width:6px;height:6px;border-radius:50%;background:#16a34a;animation:p 2s infinite}
+.live.err::before{background:var(--red);animation:none}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.3}}
+
+main{max-width:1180px;margin:0 auto;padding:26px 22px 90px}
+
+/* ---------- staggered load ---------- */
+.fade{animation:f .4s cubic-bezier(.2,.7,.3,1) both}
+@keyframes f{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
+
+/* ---------- project card ---------- */
+.pcard{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:16px 18px 8px;margin-bottom:16px}
+.pcard:not(.open){padding-bottom:16px}
+.phead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px;cursor:pointer;user-select:none}
+.pchev{font-size:11px;color:var(--faint);width:10px;flex:none;align-self:center}
+.phead:hover .pname{color:var(--blue)}
+.pname{font-size:14px;font-weight:650;letter-spacing:-.02em}
+.pcwd{font-size:10px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.pmeta{margin-left:auto;display:flex;gap:16px;align-items:baseline}
+.pm{display:flex;flex-direction:column;align-items:flex-end}
+.pm .l{font-size:9px;letter-spacing:.09em;text-transform:uppercase;color:var(--faint)}
+.pm .v{font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.ptools{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0 4px}
+.ttool{font-size:10px;color:var(--dim);background:var(--panel-2);border:1px solid var(--line-2);border-radius:5px;padding:2px 7px;white-space:nowrap}
+.ttool b{color:var(--txt);font-weight:600}
+
+/* ---------- session table ---------- */
+.ptbl{width:100%;border-collapse:collapse;margin-top:8px}
+.ptbl thead th{font-size:9px;letter-spacing:.08em;text-transform:uppercase;color:var(--faint);text-align:right;font-weight:500;padding:5px 8px;border-bottom:1px solid var(--line-2)}
+.ptbl thead th:first-child{text-align:left}
+.ptbl tbody td{font-size:11px;padding:5px 8px;border-bottom:1px solid var(--line-2);text-align:right;font-variant-numeric:tabular-nums}
+.ptbl tbody td:first-child{text-align:left}
+.ptbl tbody tr{cursor:pointer}
+.ptbl tbody tr:hover{background:var(--panel-2)}
+.ptbl tbody tr:last-child td{border-bottom:none}
+.sid{color:var(--blue);font-weight:500}
+.sid:hover{text-decoration:underline;text-underline-offset:2px}
+
+/* ---------- states ---------- */
+.state{padding:80px 20px;text-align:center;color:var(--dim);font-size:12px}
+.state .big-msg{font-size:15px;font-weight:600;color:var(--txt);margin-bottom:6px}
+.state button{color:var(--blue);text-decoration:underline;text-underline-offset:2px;margin-top:8px}
+.banner{background:#fee2e2;border:1px solid #f6bcbc;color:var(--red);border-radius:5px;padding:6px 10px;font-size:11px;margin-bottom:14px}
+
+@media(max-width:720px){.pmeta{margin-left:0;width:100%;gap:20px}}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="/projects.js"></script>
+</body>
+</html>

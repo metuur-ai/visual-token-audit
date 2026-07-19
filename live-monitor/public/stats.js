@@ -130,6 +130,7 @@ function App() {
       <a href="/">Dashboard</a>
       <a href="/observe">Observe</a>
       <a href="/stats" class="on">Stats</a>
+      <a href="/projects">Projects</a>
     </nav>
     <span class="gen">${data ? `last ${data.days || days} days · generated ${rel(data.generatedAt)}` : ''}</span>
     <div class="seg">
