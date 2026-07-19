@@ -103,7 +103,7 @@ function App() {
   }, [days]);
 
   const top = html`<header class="top">
-    <span class="logo">projects</span>
+    <span class="logo">Historical Session By Project</span>
     <${Nav} />
     <span class="gen">${data ? `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} · last ${data.days || days} days` : ''}</span>
     <div class="seg">

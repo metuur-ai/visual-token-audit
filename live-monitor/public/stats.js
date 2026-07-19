@@ -125,7 +125,7 @@ function App() {
   }, [days]);
 
   const top = html`<header class="top">
-    <span class="logo">token monitor</span>
+    <span class="logo">Token Stats</span>
     <nav class="nav">
       <a href="/">Dashboard</a>
       <a href="/observe">Observe</a>
