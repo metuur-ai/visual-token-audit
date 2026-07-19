@@ -29,6 +29,15 @@ that `dist/` is what `npx` ships and runs.
 > If the dashboard hasn't been built yet, `/` returns a `503 "UI not built yet"`
 > placeholder — the API endpoints below still work regardless.
 
+## Source layout
+
+`collector.ts` is a thin entry point: it resolves the `public/` directory and
+wires the pieces together. The implementation lives in `src/*.ts`, one concern per
+module — `config`, `types`, `util`, `cost`, `parse`, `state` (the shared ring
+buffer + session stores), `watch` (file tailing), the `tree` / `session-detail` /
+`observe` / `stats` / `projects` / `projects-endpoint` builders, and `server`
+(HTTP + SSE). `bun build` bundles them all back into a single `dist/collector.js`.
+
 ## Environment variables
 
 | Var | Default | Meaning |
@@ -51,13 +60,29 @@ that `dist/` is what `npx` ships and runs.
 - File truncation/rotation (stored offset > current size) resets to EOF without
   replaying.
 
+## Web pages
+
+The dashboard is a set of static pages served from `public/` (each returns the
+`503 "UI not built yet"` placeholder if `dist/` hasn't been built). Every page has
+a matching `.js` served alongside it.
+
+| Route | Page |
+|---|---|
+| `GET /` | Live event feed (`index.html` + `app.js`) |
+| `GET /observe` (`/observe.html`) | Context / token observation view (`observe.js`) |
+| `GET /stats` (`/stats.html`) | Usage stats over a day window (`stats.js`) |
+| `GET /projects` (`/projects.html`) | Per-project session index (`projects.js`) |
+| `GET /vendor/<file>.js` | Bundled front-end vendor scripts |
+
 ## HTTP API
 
 | Route | Response |
 |---|---|
-| `GET /` | `public/index.html` (or 503 placeholder if missing) |
-| `GET /app.js` | `public/app.js` (or 503 placeholder if missing) |
 | `GET /api/snapshot` | `{ events: MonitorEvent[], sessions: SessionAgg[], startedAt }` — full ring buffer (last 5000 events) + per-session aggregates |
+| `GET /api/session/<id>` | Per-session detail tree (tool / sub-agent attribution). `404 { error }` for an unknown id |
+| `GET /api/observe/<id>` | Per-session context / token breakdown. `404 { error }` for an unknown id |
+| `GET /api/stats?days=N` | Usage aggregates over the last `N` days (`days` clamped to 1–30, default 14) |
+| `GET /api/projects?days=N` | Sessions grouped by project over the last `N` days (`days` clamped to 1–60, default 30); envelope `{ projects, startedAt, days }`. History beyond the in-memory ~48h window is filled from an on-disk scan |
 | `GET /events` | SSE stream. Each message is `id: <n>\ndata: <JSON MonitorEvent>\n\n`. Honors the `Last-Event-ID` request header (replays buffered events with a greater id before going live). Sends `: keepalive\n\n` every 25s. |
 
 See `CONTRACT.md` for the exact `MonitorEvent` / `SessionAgg` schemas.

@@ -78,7 +78,10 @@
   .panel-scroll { overflow-y: auto; flex: 1; }
 
   /* ── Left panel border ── */
-  #left-panel { border-right: 1px solid var(--border); }
+  /* container-type lets the sessions table react to THIS panel's width, which
+     shrinks to 42% whenever a session detail is open (see #main.detail-open) —
+     independent of the viewport, so plain media queries wouldn't catch it. */
+  #left-panel { border-right: 1px solid var(--border); container-type: inline-size; }
 
   /* ── Sessions table ── */
   table { width: 100%; border-collapse: collapse; table-layout: fixed; }
@@ -385,6 +388,34 @@
     #main { grid-template-columns: 1fr !important; grid-template-rows: auto 1fr; height: auto; overflow: visible; }
     #left-panel { border-right: none; border-bottom: 1px solid var(--border); max-height: 50vh; }
     .loading-grid { grid-template-columns: 1fr; }
+  }
+
+  /* ── Responsive sessions table ──
+     As the left panel narrows, drop the least-glanceable columns so the ones
+     that matter — Project, Prpts, Last and the Observe link — always stay
+     readable (the Observe link was clipping to "Ob" before). Each hidden column
+     also gets its <col> width zeroed so table-layout:fixed redistributes the
+     freed width to the remaining columns instead of leaving a gap. */
+  #sessions-table td:nth-child(11) { overflow: visible; }   /* never clip Observe → */
+
+  /* ≤680px: hide Session id + cache read/write */
+  @container (max-width: 680px) {
+    #sessions-table col.c-sess, #sessions-table col.c-cr, #sessions-table col.c-cw { width: 0; }
+    #sessions-table thead th:nth-child(2), #sessions-table tbody td:nth-child(2),
+    #sessions-table thead th:nth-child(6), #sessions-table tbody td:nth-child(6),
+    #sessions-table thead th:nth-child(7), #sessions-table tbody td:nth-child(7) { display: none; }
+  }
+  /* ≤520px: also hide Top Tools + Model */
+  @container (max-width: 520px) {
+    #sessions-table col.c-tools, #sessions-table col.c-mdl { width: 0; }
+    #sessions-table thead th:nth-child(8), #sessions-table tbody td:nth-child(8),
+    #sessions-table thead th:nth-child(9), #sessions-table tbody td:nth-child(9) { display: none; }
+  }
+  /* ≤400px: also hide In + Out — leaves Project, Prpts, Last, Observe */
+  @container (max-width: 400px) {
+    #sessions-table col.c-in, #sessions-table col.c-out { width: 0; }
+    #sessions-table thead th:nth-child(4), #sessions-table tbody td:nth-child(4),
+    #sessions-table thead th:nth-child(5), #sessions-table tbody td:nth-child(5) { display: none; }
   }
 </style>
 </head>
