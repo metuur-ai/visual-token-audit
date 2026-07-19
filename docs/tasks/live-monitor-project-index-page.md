@@ -63,7 +63,7 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
 
 ## Unit 4: Projects index UI (grouping, sort, session list, deep-links)
 
-- [ ] 4.1 Build `public/projects.html` + `public/projects.js` to fetch and render the index with session deep-links (deps: 1.1, 1.2, 2.1, est: ~50m)
+- [x] 4.1 Build `public/projects.html` + `public/projects.js` to fetch and render the index with session deep-links (deps: 1.1, 1.2, 2.1, est: ~50m)
   - why: Present the folded data as a scannable, recency-ordered index and let the user jump from a project straight to a session's Observer view — the core rediscovery workflow this feature exists for. Consumes the endpoint contract pinned in 1.1/1.2 and is served by 2.1.
   - acceptance:
     - R-4.1 — "WHEN the Projects page loads, THE SYSTEM SHALL fetch `/api/projects` and render one visible entry per project record in the returned order."
