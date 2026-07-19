@@ -74,6 +74,20 @@ a matching `.js` served alongside it.
 | `GET /projects` (`/projects.html`) | Per-project session index (`projects.js`) |
 | `GET /vendor/<file>.js` | Bundled front-end vendor scripts |
 
+## Screenshots
+
+**Projects** — sessions grouped per project over a day window, each group a collapsible table.
+
+![Projects index page](../docs/img/projects.png)
+
+**Observe** — per-session context-window and token breakdown: recency registry, loading panel, usage, and timeline.
+
+![Session observability page](../docs/img/observe_session.png)
+
+**Stats** — usage aggregates over a day window: daily tokens plus top tools, commands, skills, agents, and models.
+
+![Usage stats page](../docs/img/stats.png)
+
 ## HTTP API
 
 | Route | Response |
