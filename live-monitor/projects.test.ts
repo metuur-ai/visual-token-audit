@@ -8,7 +8,7 @@ import {
   projectDisplayName,
   UNKNOWN_KEY,
   type FoldSession,
-} from "./projects.ts";
+} from "./src/projects.ts";
 
 const U = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 function sess(o: Partial<FoldSession>): FoldSession {
@@ -200,7 +200,7 @@ test("R-1.3 every project field is present (none undefined)", () => {
 });
 
 test("no fs import in projects.ts (R-5.5 / R-1.9)", async () => {
-  const src = await Bun.file(new URL("./projects.ts", import.meta.url)).text();
+  const src = await Bun.file(new URL("./src/projects.ts", import.meta.url)).text();
   expect(src).not.toContain("readFile");
   expect(src).not.toContain("listJsonlFiles");
   expect(src).not.toMatch(/from ["']fs["']/);
