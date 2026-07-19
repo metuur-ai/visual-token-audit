@@ -44,7 +44,10 @@ main{max-width:1180px;margin:0 auto;padding:26px 22px 90px}
 
 /* ---------- project card ---------- */
 .pcard{background:var(--panel);border:1px solid var(--line);border-radius:9px;padding:16px 18px 8px;margin-bottom:16px}
-.phead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px}
+.pcard:not(.open){padding-bottom:16px}
+.phead{display:flex;align-items:baseline;gap:12px;flex-wrap:wrap;margin-bottom:4px;cursor:pointer;user-select:none}
+.pchev{font-size:11px;color:var(--faint);width:10px;flex:none;align-self:center}
+.phead:hover .pname{color:var(--blue)}
 .pname{font-size:14px;font-weight:650;letter-spacing:-.02em}
 .pcwd{font-size:10px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
 .pmeta{margin-left:auto;display:flex;gap:16px;align-items:baseline}

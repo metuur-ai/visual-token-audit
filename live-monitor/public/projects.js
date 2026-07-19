@@ -47,9 +47,11 @@ const Nav = () => html`<nav class="nav">
 
 /* ============================ project card ============================ */
 function ProjectCard({ p, delay }) {
+  const [open, setOpen] = useState(false);
   const go = id => { window.location.href = sessionHref(id); };
-  return html`<section class="pcard fade" style="animation-delay:${delay}ms">
-    <div class="phead">
+  return html`<section class="pcard fade ${open ? 'open' : ''}" style="animation-delay:${delay}ms">
+    <div class="phead" onClick=${() => setOpen(o => !o)} title=${open ? 'collapse sessions' : 'expand sessions'}>
+      <span class="pchev">${open ? '▾' : '▸'}</span>
       <span class="pname">${p.name}</span>
       ${p.cwd ? html`<span class="pcwd">${p.cwd}</span>` : null}
       <div class="pmeta">
@@ -59,25 +61,26 @@ function ProjectCard({ p, delay }) {
         <div class="pm"><span class="l">Tokens</span><span class="v">${fmt(usageTok(p.usage))}</span></div>
       </div>
     </div>
-    ${(p.topTools && p.topTools.length) ? html`<div class="ptools">
-      ${p.topTools.map(t => html`<span class="ttool" key=${t.name}>${t.name} <b>${int(t.count)}</b></span>`)}
-    </div>` : null}
-    <table class="ptbl">
-      <thead><tr>
-        <th>Session</th><th>Last</th><th>Prompts</th><th>In</th><th>Out</th><th>C.Read</th><th>C.Wrt</th>
-      </tr></thead>
-      <tbody>
-        ${p.sessions.map(s => html`<tr key=${s.sessionId} onClick=${() => go(s.sessionId)} title=${s.sessionId}>
-          <td><a class="sid" href=${sessionHref(s.sessionId)} onClick=${e => e.stopPropagation()}>${shortSid(s.sessionId)}</a></td>
-          <td>${rel(s.lastTs)}</td>
-          <td>${int(s.prompts)}</td>
-          <td>${fmt(s.usage.input)}</td>
-          <td>${fmt(s.usage.output)}</td>
-          <td>${fmt(s.usage.cacheRead)}</td>
-          <td>${fmt(s.usage.cacheWrite)}</td>
-        </tr>`)}
-      </tbody>
-    </table>
+    ${open ? html`
+      ${(p.topTools && p.topTools.length) ? html`<div class="ptools">
+        ${p.topTools.map(t => html`<span class="ttool" key=${t.name}>${t.name} <b>${int(t.count)}</b></span>`)}
+      </div>` : null}
+      <table class="ptbl">
+        <thead><tr>
+          <th>Session</th><th>Last</th><th>Prompts</th><th>In</th><th>Out</th><th>C.Read</th><th>C.Wrt</th>
+        </tr></thead>
+        <tbody>
+          ${p.sessions.map(s => html`<tr key=${s.sessionId} onClick=${() => go(s.sessionId)} title=${s.sessionId}>
+            <td><a class="sid" href=${sessionHref(s.sessionId)} onClick=${e => e.stopPropagation()}>${shortSid(s.sessionId)}</a></td>
+            <td>${rel(s.lastTs)}</td>
+            <td>${int(s.prompts)}</td>
+            <td>${fmt(s.usage.input)}</td>
+            <td>${fmt(s.usage.output)}</td>
+            <td>${fmt(s.usage.cacheRead)}</td>
+            <td>${fmt(s.usage.cacheWrite)}</td>
+          </tr>`)}
+        </tbody>
+      </table>` : null}
   </section>`;
 }
 
