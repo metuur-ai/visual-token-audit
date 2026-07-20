@@ -140,6 +140,30 @@ TreeNode = {
   Dedupe by (type,name); keep ≤80 chars evidence.
 - **invoked**: explicit uses — Skill tool calls, slash commands typed by user (`<command-name>…</command-name>` tags or leading `/word` in prompt text — VERIFY the real tag format in transcripts), Task/Agent calls, MCP tool calls.
 
+## ObsNode.baseBreakdown (observe payload — `GET /api/observe/:id`, ROOT node only)
+
+Optional, additive. Attached only to the **root** ObsNode; agent nodes and older payloads omit it
+(the Loading panel falls back to the `pre[]` view). Decomposes the preloaded `base` floor
+(`ctxBreakdown.base`) into `/context`-style categories reconstructed from local disk files.
+
+```jsonc
+{
+  "base": 99800,                 // == ctxBreakdown.base, the floor being decomposed
+  "tokenizer": "o200k" | "est",  // provenance of the token counts
+  "scannedAt": "2026-07-20T…Z",  // ISO time the disk was scanned
+  "categories": [
+    { "k": "skill",  "label": "Skills",        "tk": 27900, "items": [ { "n": "harness-audit", "tk": 120, "used": true, "observable": true } ] },
+    { "k": "agent",  "label": "Custom agents", "tk": 4100,  "items": [ /* … */ ] },
+    { "k": "memory", "label": "Memory files",  "tk": 2500,  "items": [ { "n": "CLAUDE.md", "tk": 900, "used": false, "observable": false } ] },
+    { "k": "residual", "label": "System + tools + MCP (not itemizable)", "tk": 65300, "residual": true }
+  ]
+}
+```
+
+Invariant: **Σ categories.tk === base** (residual reconciles). `residual:true` marks the single
+non-expandable catch-all (no `items`). `observable:false` items (memory) are counted as *used* for
+waste framing — never flagged as wasted.
+
 ## Dashboard requirements (Agent B) — v2
 
 - **LIGHT theme** (white/near-white background `#fafafa`, dark gray text, subtle borders `#e2e2e2`, accent blue; keep kind-badge colors readable on light bg). No dark mode.

@@ -20,10 +20,12 @@
 
 import { LABEL_LEN } from "./config.ts";
 import { costUSD } from "./cost.ts";
+import { StartupInventory, getStartupInventory } from "./startup-inventory.ts";
 import { observeCache, sessionLines, sessions, subagentMeta } from "./state.ts";
 import { SidechainChain, chainModel, claimChain, classifyReminder, collectSidechainChains, mcpServer, promptOf, toolNodeKind } from "./tree.ts";
 import { SessionLine } from "./types.ts";
-import { clip } from "./util.ts";
+import { basename } from "path";
+import { clip, log } from "./util.ts";
 
 export type ObsKind =
   | "system" | "memory" | "skill" | "command" | "plugin" | "mcp" | "hook" | "tool" | "agent";
@@ -58,6 +60,24 @@ export interface CtxBreakdown {
   prompts: number;     // ctx − base − assistant − toolResults (user input + estimation slack)
   overflow: number;    // max(0, base+assistant+toolResults − ctx) — evicted/compacted or estimate slack
 }
+// Reconstruction of the `base` floor (CtxBreakdown.base) from local disk: the
+// disk-itemizable categories (skills/agents/memory) plus a single residual row
+// for the un-reconstructable remainder (system prompt + tool schemas + MCP).
+// Σ(categories.tk) === base exactly (residual is defined to make it so). tk uses
+// the vendored o200k tokenizer (provenance stamped); `est` if the vocab is absent.
+export interface BaseCategory {
+  k: "skill" | "agent" | "memory" | "residual";
+  label: string;
+  tk: number;
+  residual?: boolean;
+  items?: Array<{ n: string; tk: number; used: boolean; observable?: boolean }>;
+}
+export interface BaseBreakdown {
+  base: number;
+  tokenizer: "o200k" | "est";
+  scannedAt: string;
+  categories: BaseCategory[];
+}
 export interface ObsNode {
   id: string;
   type: "session" | "agent";
@@ -76,6 +96,7 @@ export interface ObsNode {
   pre: ObsResource[];
   dyn: ObsTrigger[];
   ctxBreakdown?: CtxBreakdown; // full window decomposition (spec §7.5)
+  baseBreakdown?: BaseBreakdown; // root-only: disk reconstruction of `base` (Tier 2)
   toolTokens?: Record<string, number>; // tool/skill/agent name → Σ result tokens (bytes/4)
 }
 
@@ -235,6 +256,54 @@ export function obsDyn(
   return out;
 }
 
+// Reconstruct `base` (turn-1 floor) from the startup inventory: itemize the
+// disk-recoverable categories (skills/agents/memory) and collapse the rest into
+// a single residual row. `used` joins reuse the session's invokedNames set
+// (skill|/agent|/plugin| keys), matching pre[] semantics. Memory rows are
+// observable:false (excluded from waste, same stance as pre[] memory).
+export function buildBaseBreakdown(
+  base: number,
+  inv: StartupInventory,
+  invokedNames: Set<string>,
+  _cwd?: string,
+): BaseBreakdown {
+  const sum = (a: { tk: number }[]) => a.reduce((s, x) => s + x.tk, 0);
+  const skillTk = sum(inv.skills);
+  const agentTk = sum(inv.agents);
+  const memoryTk = sum(inv.memory);
+  const rawResidual = base - skillTk - agentTk - memoryTk;
+  if (rawResidual < 0) {
+    // Negative residual signals scope/tokenizer drift (disk sum > measured base).
+    log("baseBreakdown: negative residual", { base, skillTk, agentTk, memoryTk, rawResidual });
+  }
+  const residual = Math.max(0, rawResidual);
+
+  const skillItems = inv.skills.map((s) => {
+    const ns = s.name.includes(":") ? s.name.split(":")[0] : "";
+    const used = invokedNames.has("skill|" + s.name) || (ns ? invokedNames.has("plugin|" + ns) : false);
+    return { n: s.name, tk: s.tk, used };
+  });
+  const agentItems = inv.agents.map((a) => ({
+    n: a.name,
+    tk: a.tk,
+    used: invokedNames.has("agent|" + a.name),
+  }));
+  const memoryItems = inv.memory.map((m) => ({
+    n: basename(m.path),
+    tk: m.tk,
+    used: false,
+    observable: false,
+  }));
+
+  const categories: BaseCategory[] = [
+    { k: "skill", label: "Skills", tk: skillTk, items: skillItems },
+    { k: "agent", label: "Custom agents", tk: agentTk, items: agentItems },
+    { k: "memory", label: "Memory files", tk: memoryTk, items: memoryItems },
+    { k: "residual", label: "System + tools + MCP (not itemizable)", tk: residual, residual: true },
+  ];
+  return { base, tokenizer: inv.tokenizer, scannedAt: inv.scannedAt, categories };
+}
+
 export function buildObserveSnapshot(sessionId: string): string | null {
   const cached = observeCache.get(sessionId);
   if (cached) return cached.json;
@@ -339,6 +408,16 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     toolTokens: obsToolTokens(main, resultFor),
   };
   const nodes: ObsNode[] = [root];
+
+  // Tier 2: reconstruct the base floor from local disk (skills/agents/memory)
+  // for the ROOT only — agent nodes keep pre[] evidence. getStartupInventory is
+  // its own 60s-cached scan, so this stays cheap under the observeCache path.
+  root.baseBreakdown = buildBaseBreakdown(
+    root.ctxBreakdown?.base ?? 0,
+    getStartupInventory(agg.cwd),
+    invokedNames,
+    agg.cwd,
+  );
 
   // Agent tool_uses on the main chain claim sidechain chains → child nodes,
   // plus a display-only dyn event on the root (spec §3: never sum both).

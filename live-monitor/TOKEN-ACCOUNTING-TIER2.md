@@ -1,9 +1,12 @@
 # Token Accounting — Tier 2 follow-up
 
-Status: **planned / not implemented.** Tracks the remaining work on the Session
-Observability token model after Tier 1 (UI) and Tier 1b (sound `CtxBreakdown`
-math) shipped. See `src/observe.ts` for the current implementation and
-`.devlocal/knowledge-nudge/.knowledge-capture-nudged` for the history.
+Status: **frontend shipped / backend pending.** The Loading-panel category +
+per-item drill-down view is implemented in `public/observe.js` (gated on the
+root node's `baseBreakdown`); the backend that produces `baseBreakdown` (vendored
+o200k tokenizer, disk inventory, payload assembly) is still to build. Tracks the
+remaining work on the Session Observability token model after Tier 1 (UI) and
+Tier 1b (sound `CtxBreakdown` math) shipped. See `src/observe.ts` for the current
+implementation and `.devlocal/knowledge-nudge/.knowledge-capture-nudged` for the history.
 
 ---
 
@@ -113,8 +116,12 @@ BPE step must not pull an npm tree at runtime. Options, in order of preference:
       headline `base`-category number.
 - [ ] Zero-dependency runtime preserved (vendored encoder or opt-in flag).
 - [ ] Additive to the payload — no breaking change to `CtxBreakdown` consumers.
-- [ ] Loading panel renders the category rows with a "reconstructed from local
-      files — may drift from session-time state" caveat.
+- [x] Loading panel renders the category rows with a "reconstructed from local
+      files — may drift from session-time state" caveat. **(frontend shipped)**
+      Stacked bar + category rows (label · tk · % of base) + per-item drill-down
+      with used/unused dots, an honest skill/agent waste stat, and a residual row
+      reconciling to base. Falls back to the `pre[]` view when `baseBreakdown` is
+      absent. Tokenizer-accuracy and exact-reconciliation ACs remain with the backend.
 
 ## Out of scope
 
