@@ -43,17 +43,20 @@ export interface ObsTrigger {
   at: string;
   by: string;
 }
-// Full decomposition of a node's peak context window (`ctx`). All measured from
-// transcript usage/bytes except `base` (derived from the turn-1 window floor)
-// and `prompts` (residual). Segments sum to `ctx` when nothing was compacted;
-// `overflow` records cumulative history that has been evicted out of the window.
+// Full decomposition of a node's peak context window (`ctx`). `ctx` is a STOCK
+// (peak input-window occupancy), so the flow buckets (`assistant`, `toolResults`)
+// are accumulated only UP TO the turn where the window peaked — history produced
+// after the peak is not resident in that window and would otherwise inflate the
+// sum. `base` is the turn-1 floor and `prompts` is the residual, so segments sum
+// to `ctx` (± estimation slack) with no compaction. `overflow` fires only when
+// accumulated history already exceeds the peak window (compaction/eviction).
 export interface CtxBreakdown {
   ctx: number;         // peak window = input + cacheRead + cacheWrite (ground truth)
   base: number;        // system prompt + tool schemas + memory/CLAUDE.md — turn-1 floor
-  assistant: number;   // Σ usage.output — assistant text + tool-call JSON (measured)
-  toolResults: number; // Σ resultBytes/4 — file reads, bash, skill bodies, sub-agent reports (measured)
+  assistant: number;   // Σ usage.output up to the peak-window turn (resident history)
+  toolResults: number; // Σ resultBytes/4 up to the peak-window turn (resident history)
   prompts: number;     // ctx − base − assistant − toolResults (user input + estimation slack)
-  overflow: number;    // max(0, measured − ctx) — history compacted/evicted out of window
+  overflow: number;    // max(0, base+assistant+toolResults − ctx) — evicted/compacted or estimate slack
 }
 export interface ObsNode {
   id: string;
@@ -77,8 +80,17 @@ export interface ObsNode {
 }
 
 export const OBS_CAP = 200_000;
+// Byte-based token estimate (bytes/4), matching the tool_result / skill-body
+// sizing below so every "÷4" estimate in this module shares one basis (UTF-16
+// string .length diverges from bytes for multibyte text). Not a real tokenizer.
 export const estTok = (s: string | undefined): number =>
-  s ? Math.max(1, Math.round(s.length / 4)) : 0;
+  s ? Math.max(1, Math.round(Buffer.byteLength(s, "utf8") / 4)) : 0;
+
+// First-prompt sizing prefers the full byte length captured at parse time
+// (SessionLine.textBytes); `text` is clipped to TEXT_SNIPPET_LEN and would
+// undercount, folding the user's first prompt into the ctx `base` floor.
+const promptTok = (ln: SessionLine): number =>
+  ln.textBytes !== undefined ? Math.round(ln.textBytes / 4) : estTok(ln.text);
 
 // Self metrics over a set of lines (one node's own turns only).
 export function obsSelf(lns: SessionLine[]) {
@@ -97,8 +109,12 @@ export function obsSelf(lns: SessionLine[]) {
     }
     if (ln.kind !== "assistant") continue;
     if (ln.usage) {
+      // selfTok = fresh input + output (cache EXCLUDED) — a per-node flow.
+      // cost is cache-INCLUSIVE (see costUSD), so a node can legitimately show a
+      // small selfTok yet a real cost. Absent/unknown model → DEFAULT_PRICING
+      // (priceFor), so cost is never silently dropped when selfTok still counts.
       selfTok += ln.usage.input + ln.usage.output;
-      if (ln.model) cost += costUSD(ln.model, ln.usage);
+      cost += costUSD(ln.model ?? "", ln.usage);
       ctx = Math.max(ctx, ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite);
       turns++;
     }
@@ -113,46 +129,53 @@ export function obsSelf(lns: SessionLine[]) {
 
 // Full context-window decomposition for one node's own lines. See CtxBreakdown.
 // `base` is the turn-1 window (system + tools + memory) minus that turn's own
-// user prompt; the remaining buckets accumulate across the node's turns and the
-// residual `prompts` absorbs user input we can't size precisely (prompt text is
-// clipped in the transcript) plus cache/estimation slack.
-export function obsBreakdown(
-  lns: SessionLine[],
-  resultFor: Map<string, { ts: number; bytes: number }>,
-): CtxBreakdown {
+// user prompt. The flow buckets are accumulated as we walk the transcript in
+// order but only FROZEN at the turn where the input window peaked: a turn's own
+// output is not part of its own input window, and anything produced after the
+// peak is not resident in it, so summing every turn would wrongly pin `prompts`
+// to 0 and make `overflow` grow with turn count rather than signal eviction.
+export function obsBreakdown(lns: SessionLine[]): CtxBreakdown {
   let ctx = 0;
   let firstCtx = 0;
   let firstPromptTok = 0;
-  let assistant = 0;
-  let toolResults = 0;
   let sawTurn = false;
   let sawPrompt = false;
+  let cumAssistant = 0; // running Σ output as we walk the lines in order
+  let cumResults = 0;   // running Σ tool_result bytes/4 (deduped)
+  let peakAssistant = 0; // cumAssistant frozen at the peak-window turn
+  let peakResults = 0;   // cumResults frozen at the peak-window turn
   const seenResult = new Set<string>(); // avoid double-counting a shared tool_result
   for (const ln of lns) {
     if (ln.kind === "prompt" && !sawPrompt) {
-      firstPromptTok = estTok(ln.text);
+      firstPromptTok = promptTok(ln);
       sawPrompt = true;
     }
     if (ln.kind === "tool_result" && ln.toolResultFor) {
       if (!seenResult.has(ln.toolResultFor)) {
         seenResult.add(ln.toolResultFor);
-        toolResults += Math.round((ln.resultBytes ?? 0) / 4);
+        cumResults += Math.round((ln.resultBytes ?? 0) / 4);
       }
     }
     if (ln.kind !== "assistant" || !ln.usage) continue;
-    assistant += ln.usage.output;
     const w = ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite;
-    ctx = Math.max(ctx, w);
     if (!sawTurn) {
       firstCtx = w;
       sawTurn = true;
     }
+    if (w > ctx) {
+      // New peak input window: resident history is everything accumulated
+      // BEFORE this turn's own output (its output isn't in its own input).
+      ctx = w;
+      peakAssistant = cumAssistant;
+      peakResults = cumResults;
+    }
+    cumAssistant += ln.usage.output;
   }
   const base = Math.max(0, firstCtx - firstPromptTok);
-  const measured = base + assistant + toolResults;
+  const measured = base + peakAssistant + peakResults;
   const prompts = Math.max(0, ctx - measured);
   const overflow = Math.max(0, measured - ctx);
-  return { ctx, base, assistant, toolResults, prompts, overflow };
+  return { ctx, base, assistant: peakAssistant, toolResults: peakResults, prompts, overflow };
 }
 
 // Runtime tokens returned by each tool/skill/agent = its tool_result byte size /4.
@@ -312,7 +335,7 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     tools: rootSelf.tools,
     pre: rootPre,
     dyn: obsDyn(main, "main", resultFor),
-    ctxBreakdown: obsBreakdown(main, resultFor),
+    ctxBreakdown: obsBreakdown(main),
     toolTokens: obsToolTokens(main, resultFor),
   };
   const nodes: ObsNode[] = [root];
@@ -344,7 +367,7 @@ export function buildObserveSnapshot(sessionId: string): string | null {
       // (legacy inline chains rarely carry reminders — usually empty there).
       pre: buildPre(chain.lines),
       dyn: obsDyn(chain.lines, name, resultFor),
-      ctxBreakdown: obsBreakdown(chain.lines, resultFor),
+      ctxBreakdown: obsBreakdown(chain.lines),
       toolTokens: obsToolTokens(chain.lines, resultFor),
     });
     root.dyn.push({ k: "agent", n: name, tk: self.selfTok, at, by: "main" });

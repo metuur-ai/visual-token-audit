@@ -375,6 +375,10 @@ function RegistryPanel({ m, reg, setReg }) {
 function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, toggleGrp }) {
   const pre = n.pre || [];
   const tot = sum(pre, p => p.tk), waste = sum(pre.filter(p => !p.used), p => p.tk);
+  // True preloaded floor from usage accounting (turn-1 window minus first prompt).
+  // pre[] is only the reminder-enumerated subset of this; base is comparable to /context.
+  const floor = (n.ctxBreakdown && n.ctxBreakdown.base) || 0;
+  const itemPct = floor ? tot / floor * 100 : 0;
   const pf = pre.filter(p => preF === 'all' || (preF === 'used' && p.used) || (preF === 'unused' && !p.used));
   const selfDyn = (n.dyn || []).map(d => ({ ...d, _self: true }));
   const dDyn = scope === 'tree' ? m.descDyn(n) : [];
@@ -388,7 +392,12 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
       <div class="lp-col">
         <div class="lp-h"><span class="lp-t">Auto-loaded at startup</span><span class="chip">always in context</span></div>
         <div class="lp-d">Present before the first token. Paid for on every turn whether or not the model touched it.</div>
-        <div class="stat"><b>${fmt(tot)}</b> tokens preloaded${tot ? html` · <span class="warn">${fmt(waste)} (${Math.round(waste / tot * 100)}%) never referenced</span>` : null} · ${pre.length} resources${pre.some(p => p.est) ? html` <span class="mut">· ~ = estimated</span>` : null}</div>
+        ${floor ? html`
+        <div class="stat"><b>${fmt(floor)}</b> preloaded floor <span class="mut">· system prompt + tool schemas + skill/agent descriptions + memory (comparable to /context)</span></div>
+        <div class="lp-d" style="margin:3px 0 5px">Only ~${fmt(tot)} (${itemPct < 1 ? '<1' : Math.round(itemPct)}%) is itemized below from transcript evidence — the rest is harness text the transcript can't break out.</div>
+        <div class="stat">${pre.length} resources itemized${tot ? html` · <span class="warn">${fmt(waste)} (${Math.round(waste / tot * 100)}%) of these never referenced</span>` : null}${pre.some(p => p.est) ? html` <span class="mut">· ~ = estimated</span>` : null}</div>`
+        : html`
+        <div class="stat"><b>${fmt(tot)}</b> tokens preloaded${tot ? html` · <span class="warn">${fmt(waste)} (${Math.round(waste / tot * 100)}%) never referenced</span>` : null} · ${pre.length} resources${pre.some(p => p.est) ? html` <span class="mut">· ~ = estimated</span>` : null}</div>`}
         <div class="filters">${[['all', 'all'], ['used', 'used'], ['unused', 'never used']].map(([f, l]) =>
           html`<button class=${preF === f ? 'on' : ''} onClick=${() => setPreF(f)}>${l}</button>`)}</div>
         <div class="scroll">
