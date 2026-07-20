@@ -375,6 +375,10 @@ function RegistryPanel({ m, reg, setReg }) {
 function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, toggleGrp }) {
   const pre = n.pre || [];
   const tot = sum(pre, p => p.tk), waste = sum(pre.filter(p => !p.used), p => p.tk);
+  // True preloaded floor from usage accounting (turn-1 window minus first prompt).
+  // pre[] is only the reminder-enumerated subset of this; base is comparable to /context.
+  const floor = (n.ctxBreakdown && n.ctxBreakdown.base) || 0;
+  const itemPct = floor ? tot / floor * 100 : 0;
   const pf = pre.filter(p => preF === 'all' || (preF === 'used' && p.used) || (preF === 'unused' && !p.used));
   const selfDyn = (n.dyn || []).map(d => ({ ...d, _self: true }));
   const dDyn = scope === 'tree' ? m.descDyn(n) : [];
@@ -382,13 +386,60 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
     .filter(d => dynF === 'all' || (dynF === 'self' && d._self) || (dynF === 'desc' && !d._self))
     .sort((a, b) => String(a.at).localeCompare(String(b.at)));
   const dynTot = sum(dynAll, d => d.tk);
+  // Tier 2: category breakdown of the preloaded floor (root node only; additive/optional)
+  const bb = n.baseBreakdown;
+  const usedOf = it => it.observable === false ? true : !!it.used;               // memory never wasted
+  const catColor = k => k === 'residual' ? '#6b7280' : (COLOR[k] || '#6b7280');  // skill/agent/memory from COLOR
+  const catShort = { skill: 'skills', agent: 'agents', memory: 'memory', residual: 'system + tools + mcp' };
+  const passF = it => preF === 'all' || (preF === 'used' && usedOf(it)) || (preF === 'unused' && !usedOf(it));
+  const bbBase = bb ? (bb.base || floor || 0) : 0;
+  const itemizable = bb ? bb.categories.filter(c => c.k === 'skill' || c.k === 'agent').flatMap(c => c.items || []) : [];
+  const itemTk = sum(itemizable, i => i.tk);
+  const bbWaste = sum(itemizable.filter(i => !usedOf(i)), i => i.tk);
   return html`<section class="panel fade">
     <div class="ph"><span class="pt">Loading panel</span><span class="psub">${n === m.root ? 'session startup vs. runtime' : n.name + ' · its own boot context'}</span></div>
     <div class="lp">
       <div class="lp-col">
         <div class="lp-h"><span class="lp-t">Auto-loaded at startup</span><span class="chip">always in context</span></div>
         <div class="lp-d">Present before the first token. Paid for on every turn whether or not the model touched it.</div>
-        <div class="stat"><b>${fmt(tot)}</b> tokens preloaded${tot ? html` · <span class="warn">${fmt(waste)} (${Math.round(waste / tot * 100)}%) never referenced</span>` : null} · ${pre.length} resources${pre.some(p => p.est) ? html` <span class="mut">· ~ = estimated</span>` : null}</div>
+        ${bb ? html`
+        <div class="stat"><b>${fmt(floor)}</b> preloaded floor <span class="mut">· system prompt + tool schemas + skill/agent descriptions + memory (comparable to /context)</span></div>
+        <div class="lp-d" style="margin:3px 0 5px">Reconstructed from local skill/agent/memory files (${bb.tokenizer === 'o200k' ? 'o200k tokenizer' : 'estimated ÷4'}) — descriptions only; may drift from session-time state. System prompt, system tools and MCP schemas aren't itemizable and fold into the residual row.</div>
+        <div class="stat">${itemizable.length} skill/agent descriptions itemized${itemTk ? html` · <span class="warn">${fmt(bbWaste)} never used</span>` : null}</div>
+        <div class="stack">${bb.categories.map(c => html`<div style="width:${bbBase ? c.tk / bbBase * 100 : 0}%;background:${catColor(c.k)}"></div>`)}</div>
+        <div class="legend">${bb.categories.map(c => html`<span><i style="background:${catColor(c.k)}"></i>${catShort[c.k] || c.label}</span>`)}</div>
+        <div class="rows">${bb.categories.map(c => {
+          const pct = bbBase ? Math.round(c.tk / bbBase * 100) : 0;
+          return html`<div class="row"><span class="k" title=${c.label}>${c.label}<span class="mut"> ${pct}%</span></span><span class="v num">${fmt(c.tk)}</span><span class="bar"><i style="width:${bbBase ? Math.min(100, c.tk / bbBase * 100) : 0}%;background:${catColor(c.k)}"></i></span></div>`;
+        })}</div>
+        <div class="filters">${[['all', 'all'], ['used', 'used'], ['unused', 'never used']].map(([f, l]) =>
+          html`<button class=${preF === f ? 'on' : ''} onClick=${() => setPreF(f)}>${l}</button>`)}</div>
+        <div class="scroll">
+          ${bb.categories.filter(c => !c.residual).map(c => {
+            const items = (c.items || []).slice().sort((a, b) => b.tk - a.tk).filter(passF);
+            const t = sum(items, i => i.tk), un = items.filter(i => !usedOf(i)).length;
+            const isOpen = grpOpen.has(c.k);
+            return html`<div class="grp">
+              <div class="grp-h" onClick=${() => toggleGrp(c.k)}>
+                <span class="tw ${isOpen ? 'open' : ''}">▶</span><span class="b b-${c.k}">${c.k}</span>
+                <span>${items.length}</span>${un ? html`<span class="warn">${un} unused</span>` : html`<span class="ok">all used</span>`}
+                <span class="c num">${fmt(t)} tok</span></div>
+              <div class="grp-b ${isOpen ? '' : 'hide'}">${items.length === 0 ? html`<div class="empty">no ${c.k} items match this filter</div>` : items.map(it => html`<div class="res ${usedOf(it) ? '' : 'is-unused'}">
+                <span class="dot ${usedOf(it) ? 'used' : 'unused'}"></span><span class="nm" title=${it.n}>${it.n}</span>
+                <span class="tk num">${fmt(it.tk)}</span></div>`)}</div>
+            </div>`;
+          })}
+          ${bb.categories.filter(c => c.residual).map(c => html`<div class="res" title=${c.label}>
+            <span class="dot" style="background:#6b7280"></span><span class="nm">${c.label}</span>
+            <span class="tk num">${fmt(c.tk)}</span></div>`)}
+        </div>`
+        : html`
+        ${floor ? html`
+        <div class="stat"><b>${fmt(floor)}</b> preloaded floor <span class="mut">· system prompt + tool schemas + skill/agent descriptions + memory (comparable to /context)</span></div>
+        <div class="lp-d" style="margin:3px 0 5px">Only ~${fmt(tot)} (${itemPct < 1 ? '<1' : Math.round(itemPct)}%) is itemized below from transcript evidence — the rest is harness text the transcript can't break out.</div>
+        <div class="stat">${pre.length} resources itemized${tot ? html` · <span class="warn">${fmt(waste)} of these never used</span>` : null}${pre.some(p => p.est) ? html` <span class="mut">· ~ = estimated</span>` : null}</div>`
+        : html`
+        <div class="stat"><b>${fmt(tot)}</b> tokens preloaded${tot ? html` · <span class="warn">${fmt(waste)} never used</span>` : null} · ${pre.length} resources${pre.some(p => p.est) ? html` <span class="mut">· ~ = estimated</span>` : null}</div>`}
         <div class="filters">${[['all', 'all'], ['used', 'used'], ['unused', 'never used']].map(([f, l]) =>
           html`<button class=${preF === f ? 'on' : ''} onClick=${() => setPreF(f)}>${l}</button>`)}</div>
         <div class="scroll">
@@ -406,7 +457,7 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
                 <span class="tk num">${p.est ? '~' : ''}${fmt(p.tk)}</span></div>`)}</div>
             </div>`;
           })}
-        </div>
+        </div>`}
       </div>
       <div class="lp-col">
         <div class="lp-h"><span class="lp-t">Invoked during execution</span><span class="chip">on demand</span></div>

@@ -232,8 +232,17 @@ def main():
     print("ALWAYS column = tokens paid every turn. For skills/agents that's the")
     print("description only, not the body -- a bloated-description flag is a real win to fix.")
     print("Token estimates are rough (~4 chars/token) -- use them to rank, not to budget.")
-    print("Remember to ask about artifacts that aren't files: UI project instructions,")
-    print("saved prompts, system prompts in code, MCP tool descriptions, memory.")
+    print()
+    print("This scan only sees FILES. The heaviest always-loaded categories usually")
+    print("are NOT files: MCP tool schemas (verbose JSON Schema from the running")
+    print("server, not stored in .mcp.json), the base system prompt, and built-in")
+    print("tool definitions -- MCP alone is often the single largest block.")
+    print("Cross-check: run /context and compare its always-loaded number to the")
+    print(f"{always:,} above. The gap is mostly MCP + system+tools. The ~4 chars/token")
+    print("estimate also drifts from /context's real tokenizer, so cite /context --")
+    print("not this total -- for any headline always-loaded figure.")
+    print("Also ask about non-file artifacts: UI project instructions, saved prompts,")
+    print("system prompts in code, memory.")
 
 
 if __name__ == "__main__":

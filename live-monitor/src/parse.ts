@@ -193,7 +193,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
           ...(rules.length ? { rules } : {}),
           ...(text ? { text } : {}),
         },
-        { command, reminders },
+        { command, reminders, textBytes: Buffer.byteLength(joined, "utf8") },
       );
     }
     if (typeof content === "string") {
@@ -210,7 +210,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
           ...(rules.length ? { rules } : {}),
           text: s,
         },
-        { command, reminders },
+        { command, reminders, textBytes: Buffer.byteLength(content, "utf8") },
       );
     }
     return null;

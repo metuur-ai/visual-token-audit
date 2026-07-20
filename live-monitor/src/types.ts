@@ -70,6 +70,7 @@ export interface SessionLine {
   toolUses: ToolUseBlock[]; // assistant tool_use blocks, in order
   toolResultFor?: string; // tool_use_id this line answers (tool_result lines)
   resultBytes?: number; // byte size of tool_result content
+  textBytes?: number; // full byte size of a prompt's content (pre-clip); sizes the first prompt for ctx `base`
 }
 
 // v3.1 (task #11): sub-agent metadata harvested from subagents/agent-<id>.meta.json.
