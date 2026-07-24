@@ -1,6 +1,8 @@
 import { expect, test } from "bun:test";
 import { StartupInventory } from "./startup-inventory.ts";
-import { buildBaseBreakdown } from "./observe.ts";
+import { buildBaseBreakdown, obsDyn } from "./observe.ts";
+import { detectSkillLoads } from "./util.ts";
+import { SessionLine } from "./types.ts";
 
 const inv: StartupInventory = {
   skills: [{ name: "a", tk: 100 }, { name: "plug:b", tk: 50 }],
@@ -40,4 +42,61 @@ test("used flags: direct skill, plugin-namespace, and agent joins", () => {
   const mem = bb.categories.find((c) => c.k === "memory")!.items!;
   expect(mem[0].observable).toBe(false);
   expect(mem[0].used).toBe(false);
+});
+
+// ----- detectSkillLoads: loader-marker skill detection --------------------------
+test("detectSkillLoads: strips loader namespace, handles COMPANION + multiline", () => {
+  expect(detectSkillLoads("SKILL: agent-skills:uncle-dev-research")).toEqual(["uncle-dev-research"]);
+  expect(detectSkillLoads("noise\nSKILL: agent-skills:a\nCOMPANION: agent-skills:b\n"))
+    .toEqual(["a", "b"]);
+  expect(detectSkillLoads("SKILL: plain-name")).toEqual(["plain-name"]);
+  expect(detectSkillLoads("no markers here")).toEqual([]);
+  // dedupe within a single result blob
+  expect(detectSkillLoads("SKILL: x\nSKILL: x")).toEqual(["x"]);
+});
+
+// ----- obsDyn: invocation capture + invoker attribution -------------------------
+const line = (p: Partial<SessionLine>): SessionLine => ({
+  ts: p.ts ?? "2026-07-24T00:00:00.000Z",
+  kind: p.kind ?? "assistant",
+  sidechain: false,
+  isMeta: false,
+  reminders: [],
+  toolUses: [],
+  ...p,
+});
+const noResults = new Map<string, { ts: number; bytes: number }>();
+
+test("obsDyn: command sets trigger; loader-skill + Skill-tool inherit it as invoker", () => {
+  const lns: SessionLine[] = [
+    line({ ts: "t1", kind: "prompt", command: "/uncle-dev-research", text: "go" }),
+    line({ ts: "t2", kind: "tool_result", toolResultFor: "b1", skillLoads: ["uncle-dev-research"] }),
+    line({ ts: "t3", toolUses: [{ id: "s1", name: "Skill", input: { skill: "superpowers:brainstorming" } }] }),
+  ];
+  const dyn = obsDyn(lns, noResults);
+  const cmd = dyn.find((d) => d.k === "command")!;
+  expect(cmd.n).toBe("/uncle-dev-research");
+  expect(cmd.by).toBe("prompt"); // a command is invoked by the user turn
+  const loader = dyn.find((d) => d.k === "skill" && d.n === "uncle-dev-research")!;
+  expect(loader.by).toBe("/uncle-dev-research"); // inherits the active command
+  const skillTool = dyn.find((d) => d.k === "skill" && d.n === "superpowers:brainstorming")!;
+  expect(skillTool.by).toBe("/uncle-dev-research");
+});
+
+test("obsDyn: a plain prompt resets the invoker to 'prompt'", () => {
+  const lns: SessionLine[] = [
+    line({ ts: "t1", kind: "prompt", command: "/uncle-dev-research", text: "go" }),
+    line({ ts: "t2", kind: "prompt", text: "just a question" }), // no command → reset
+    line({ ts: "t3", toolUses: [{ id: "s1", name: "Skill", input: { skill: "graphify" } }] }),
+  ];
+  const dyn = obsDyn(lns, noResults);
+  expect(dyn.find((d) => d.k === "skill" && d.n === "graphify")!.by).toBe("prompt");
+});
+
+test("obsDyn: repeated loader markers for the same skill emit one row", () => {
+  const lns: SessionLine[] = [
+    line({ ts: "t1", kind: "tool_result", toolResultFor: "b1", skillLoads: ["dup"] }),
+    line({ ts: "t2", kind: "tool_result", toolResultFor: "b2", skillLoads: ["dup"] }),
+  ];
+  expect(obsDyn(lns, noResults).filter((d) => d.n === "dup")).toHaveLength(1);
 });

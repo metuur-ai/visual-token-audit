@@ -103,6 +103,30 @@ export function detectRules(text: string): string[] {
   return out;
 }
 
+// Detect skills invoked through a loader convention rather than the `Skill` tool.
+// Plugin commands (e.g. uncle-dev) resolve their skill via a Bash loader that
+// prints marker lines into the tool_result output:
+//   SKILL: agent-skills:uncle-dev-research
+//   COMPANION: agent-skills:<other>
+// The marker is the authoritative "this skill fired" signal (companion-inclusive),
+// independent of whether the body ever materializes as a discrete context blob.
+// A leading loader namespace (before ':') is stripped so names key consistently.
+export function detectSkillLoads(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = /^\s*(?:SKILL|COMPANION):\s*([\w.:/-]+)/gm;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) && out.length < 16) {
+    const raw = m[1];
+    const name = raw.includes(":") ? raw.slice(raw.indexOf(":") + 1) : raw;
+    if (name && !seen.has(name)) {
+      seen.add(name);
+      out.push(name);
+    }
+  }
+  return out;
+}
+
 // Collect auto-loading evidence strings from a user prompt: <system-reminder>
 // first lines and hook markers. Returns short evidence snippets.
 export function detectReminders(text: string): string[] {

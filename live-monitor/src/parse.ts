@@ -18,7 +18,7 @@
 import { join } from "path";
 import { EVIDENCE_LEN, startedAt } from "./config.ts";
 import { MonitorEvent, SessionLine, SubagentPath, ToolUseBlock } from "./types.ts";
-import { clip, detectCommand, detectReminders, detectRules, projectName, snippet, usageFrom } from "./util.ts";
+import { clip, detectCommand, detectReminders, detectRules, detectSkillLoads, projectName, snippet, usageFrom } from "./util.ts";
 
 export interface ParseResult {
   ev: Omit<MonitorEvent, "id">;
@@ -155,6 +155,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
       let toolResultFor: string | undefined;
       let resultBytes: number | undefined;
       let text: string | undefined;
+      let resultStr = ""; // full tool_result content, for loader-marker skill detection
       let joined = "";
       for (const b of content) {
         if (!b || typeof b !== "object") continue;
@@ -169,6 +170,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
               .join("");
           }
           resultBytes = (resultBytes ?? 0) + Buffer.byteLength(cstr, "utf8");
+          resultStr += cstr + "\n";
           if (!text && cstr) text = snippet(cstr);
         } else if (b.type === "text" && typeof b.text === "string") {
           joined += b.text + "\n";
@@ -176,9 +178,10 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
         }
       }
       if (toolResultFor !== undefined) {
+        const skillLoads = detectSkillLoads(resultStr);
         return mk(
           { ts, sessionId, project, kind: "tool_result", ...(text ? { text } : {}) },
-          { toolResultFor, resultBytes },
+          { toolResultFor, resultBytes, ...(skillLoads.length ? { skillLoads } : {}) },
         );
       }
       // array of only text blocks → treat as prompt
