@@ -14,7 +14,7 @@ import { PROJECTS_DIR, STATS_DAY_MS } from "./config.ts";
 import { costUSD } from "./cost.ts";
 import { sessions } from "./state.ts";
 import { bump } from "./tree.ts";
-import { detectCommand, detectRules, log, projectName, usageFrom } from "./util.ts";
+import { detectCommand, detectRules, detectSkillLoads, log, projectName, usageFrom } from "./util.ts";
 import { listJsonlFiles, subagentPathOf } from "./watch.ts";
 
 export const STATS_CACHE_MS = 60_000;
@@ -219,15 +219,32 @@ export function buildStatsJSON(days: number): string {
         ptext = content;
       } else if (Array.isArray(content)) {
         let hasToolResult = false;
+        let resultStr = ""; // tool_result content, for loader-marker skill detection
         for (const b of content) {
           if (!b || typeof b !== "object") continue;
           if (b.type === "tool_result") {
             hasToolResult = true;
-            break;
+            const c = b.content;
+            if (typeof c === "string") resultStr += c + "\n";
+            else if (Array.isArray(c))
+              resultStr += c
+                .map((x: any) => (x?.type === "text" && typeof x.text === "string" ? x.text : ""))
+                .join("") + "\n";
+            continue;
           }
           if (b.type === "text" && typeof b.text === "string") ptext += b.text + "\n";
         }
-        if (hasToolResult) continue;
+        if (hasToolResult) {
+          // Skills resolved via a loader (SKILL:/COMPANION: markers) — count them
+          // so the registry Skills tab reflects loader-invoked skills, not just
+          // `Skill` tool_uses.
+          for (const n of detectSkillLoads(resultStr)) {
+            bump(skills, n, sid, tsMs);
+            const pl = pluginOf(n);
+            if (pl) bump(plugins, pl, sid, tsMs);
+          }
+          continue;
+        }
       } else {
         continue;
       }

@@ -222,16 +222,40 @@ export function obsToolTokens(
 // Map an AutoLoad classification to an ObsKind (identical names, typed).
 export const OBS_OBSERVABLE = new Set<ObsKind>(["skill", "command", "plugin", "mcp", "tool"]);
 
-// dyn events for one node's own lines: skill body loads + command invocations.
+// dyn events for one node's own lines: skill/command/mcp invocations, each
+// attributed to the *invoker entity* (`by`) — the trigger active when it fired,
+// not the node it ran in (the node is conveyed by the scope filter). The trigger
+// is the most recent user turn on this chain: a slash command → that command
+// name; a plain prompt → "prompt". Vectors are captured uniformly regardless of
+// mechanism: the `Skill` tool, loader markers (SKILL:/COMPANION: in a
+// tool_result), and command expansions all become rows.
 export function obsDyn(
   lns: SessionLine[],
-  by: string,
   resultFor: Map<string, { ts: number; bytes: number }>,
 ): ObsTrigger[] {
   const out: ObsTrigger[] = [];
+  let trigger = "prompt"; // active invoker until the next user turn
+  const loaderSeen = new Set<string>(); // dedupe idempotent loader-marker skills by name
   for (const ln of lns) {
-    if (ln.kind === "prompt" && ln.command) {
-      out.push({ k: "command", n: ln.command, tk: estTok(ln.text), at: ln.ts, by });
+    if (ln.kind === "prompt") {
+      if (ln.command) {
+        // A slash command is invoked by the user turn itself.
+        out.push({ k: "command", n: ln.command, tk: estTok(ln.text), at: ln.ts, by: "prompt" });
+        trigger = ln.command;
+      } else {
+        trigger = "prompt";
+      }
+      continue;
+    }
+    if (ln.kind === "tool_result") {
+      // Skills resolved via a loader (no `Skill` tool_use). Body doesn't
+      // materialize as a discrete blob, so tk stays 0 — the value is the
+      // visible invocation + its invoker.
+      for (const n of ln.skillLoads ?? []) {
+        if (loaderSeen.has(n)) continue;
+        loaderSeen.add(n);
+        out.push({ k: "skill", n, tk: 0, at: ln.ts, by: trigger });
+      }
       continue;
     }
     if (ln.kind !== "assistant") continue;
@@ -245,11 +269,11 @@ export function obsDyn(
           n: name,
           tk: r?.bytes ? Math.round(r.bytes / 4) : 0,
           at: ln.ts,
-          by,
+          by: trigger,
         });
       } else {
         const srv = mcpServer(tu.name);
-        if (srv) out.push({ k: "mcp", n: tu.name, tk: 0, at: ln.ts, by });
+        if (srv) out.push({ k: "mcp", n: tu.name, tk: 0, at: ln.ts, by: trigger });
       }
     }
   }
@@ -280,7 +304,13 @@ export function buildBaseBreakdown(
 
   const skillItems = inv.skills.map((s) => {
     const ns = s.name.includes(":") ? s.name.split(":")[0] : "";
-    const used = invokedNames.has("skill|" + s.name) || (ns ? invokedNames.has("plugin|" + ns) : false);
+    // Loader markers key on the base name (namespace stripped), which may differ
+    // from the inventory's plugin namespace — match the base name too.
+    const base = s.name.includes(":") ? s.name.slice(s.name.lastIndexOf(":") + 1) : s.name;
+    const used =
+      invokedNames.has("skill|" + s.name) ||
+      invokedNames.has("skill|" + base) ||
+      (ns ? invokedNames.has("plugin|" + ns) : false);
     return { n: s.name, tk: s.tk, used };
   });
   const agentItems = inv.agents.map((a) => ({
@@ -330,6 +360,15 @@ export function buildObserveSnapshot(sessionId: string): string | null {
   const invokedNames = new Set<string>(); // "<kind>|<base name>"
   for (const ln of lines) {
     if (ln.kind === "prompt" && ln.command) invokedNames.add("command|" + ln.command);
+    if (ln.kind === "tool_result") {
+      // Loader-marker skills (SKILL:/COMPANION:) count as fired too. Names are
+      // normalized (loader namespace stripped), so they key on the base name.
+      for (const n of ln.skillLoads ?? []) {
+        invokedNames.add("skill|" + n);
+        const ns = n.includes(":") ? n.split(":")[0] : "";
+        if (ns) invokedNames.add("plugin|" + ns);
+      }
+    }
     if (ln.kind !== "assistant") continue;
     for (const tu of ln.toolUses) {
       const { kind, name } = toolNodeKind(tu);
@@ -403,7 +442,7 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     turns: rootSelf.turns,
     tools: rootSelf.tools,
     pre: rootPre,
-    dyn: obsDyn(main, "main", resultFor),
+    dyn: obsDyn(main, resultFor),
     ctxBreakdown: obsBreakdown(main),
     toolTokens: obsToolTokens(main, resultFor),
   };
@@ -418,6 +457,22 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     invokedNames,
     agg.cwd,
   );
+
+  // Invoker attribution for agent dispatches: the trigger active on main at the
+  // dispatch ts (a slash command name, else "prompt"). Mirrors obsDyn's per-chain
+  // rule; ISO timestamps compare lexicographically and main is in order.
+  const mainTriggers: { at: string; name: string }[] = [];
+  for (const ln of main) {
+    if (ln.kind === "prompt") mainTriggers.push({ at: ln.ts, name: ln.command ?? "prompt" });
+  }
+  const triggerAt = (ts: string): string => {
+    let cur = "prompt";
+    for (const t of mainTriggers) {
+      if (t.at <= ts) cur = t.name;
+      else break;
+    }
+    return cur;
+  };
 
   // Agent tool_uses on the main chain claim sidechain chains → child nodes,
   // plus a display-only dyn event on the root (spec §3: never sum both).
@@ -445,11 +500,11 @@ export function buildObserveSnapshot(sessionId: string): string | null {
       // task #11: the agent's own boot context, from its dedicated transcript
       // (legacy inline chains rarely carry reminders — usually empty there).
       pre: buildPre(chain.lines),
-      dyn: obsDyn(chain.lines, name, resultFor),
+      dyn: obsDyn(chain.lines, resultFor),
       ctxBreakdown: obsBreakdown(chain.lines),
       toolTokens: obsToolTokens(chain.lines, resultFor),
     });
-    root.dyn.push({ k: "agent", n: name, tk: self.selfTok, at, by: "main" });
+    root.dyn.push({ k: "agent", n: name, tk: self.selfTok, at, by: triggerAt(at) });
   };
 
   for (const ln of main) {

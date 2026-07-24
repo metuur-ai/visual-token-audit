@@ -70,6 +70,7 @@ export interface SessionLine {
   toolUses: ToolUseBlock[]; // assistant tool_use blocks, in order
   toolResultFor?: string; // tool_use_id this line answers (tool_result lines)
   resultBytes?: number; // byte size of tool_result content
+  skillLoads?: string[]; // skills resolved via loader markers (SKILL:/COMPANION:) in tool_result output
   textBytes?: number; // full byte size of a prompt's content (pre-clip); sizes the first prompt for ctx `base`
 }
 
