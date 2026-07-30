@@ -16,6 +16,7 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
     - R-5.6 — "WHERE two distinct directories share the same fallback basename, THE SYSTEM SHALL group them under a single project record (an accepted collision)."
     - R-5.7 — "WHERE both a session's `cwd` and `project` are absent or empty, THE SYSTEM SHALL group it under a stable literal key `\"(unknown)\"` and use that literal as the display `name`, rather than an empty key."
   - verify: Unit-level: feed synthetic `SessionAgg` inputs — (a) `cwd` set → key === cwd; (b) `cwd` empty, `project` set → key === project; (c) both empty → key === name === `"(unknown)"`; (d) two members with same basename, different real dirs → one record. Confirm no disk/`fs` call is introduced in the helper (grep the new code for `readFile`/`listJsonlFiles`).
+  - landed: b961d77 — live-monitor/projects.ts, live-monitor/projects.test.ts
 
 ## Unit 1: Grouped projects API endpoint (`GET /api/projects`)
 
@@ -34,6 +35,7 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
     - R-1.10 — "IF the in-memory `sessions` map is empty, THE SYSTEM SHALL respond with HTTP 200 and an empty `projects` array (not an error)."
     - R-1.16 — "THE SYSTEM SHALL derive projects only from sessions currently present in the in-memory `sessions` map; projects whose sessions are not in memory SHALL NOT appear."
   - verify: With a seeded in-memory `sessions` map: `GET /api/projects` returns 200 + `application/json; charset=utf-8`; distinct-key count equals distinct keys in the map; each record has all R-1.3 fields present (none undefined); `lastActivity` === max member `lastTs`; `sessionCount` === group length; projects sorted by `lastActivity` desc then `key` asc; sessions sorted by `lastTs` desc then `sessionId` asc, each carrying `sessionId/lastTs/prompts/usage`. Empty map → `{projects:[]}` with 200. Confirm handler makes no `fs` read.
+  - landed: b961d77 — live-monitor/collector.ts, live-monitor/projects.endpoint.test.ts
 
 - [x] 1.2 Pin the response envelope, ISO timestamps, usage/top-tools shape, and parameterless contract (deps: 1.1, est: ~20m) (mutex: collector-router)
   - why: The wire contract the frontend codes against must be exact — the `{projects, startedAt}` envelope, field-wise `usage` sums (a naive object `+` is a bug), `{name,count}` top-tools capped/tie-broken, ISO-8601 timestamps identical to source, and query-string invariance. These pin the same endpoint block from 1.1 and belong with it.
@@ -43,12 +45,14 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
     - R-1.14 — "THE SYSTEM SHALL encode rolled-up `usage` as an object `{input, output, cacheRead, cacheWrite}` of summed member values, and \"top tools\" as an array of `{name, count}` sorted by `count` descending, capped at 5, ties broken by `name` ascending."
     - R-1.15 — "THE SYSTEM SHALL ignore any query parameters on `GET /api/projects` and SHALL return the same response regardless of query string."
   - verify: Response top level is exactly `{projects, startedAt}` and `startedAt` byte-equals `/api/snapshot`'s `startedAt`. For a group with two members, each of `usage.{input,output,cacheRead,cacheWrite}` equals the per-field sum (assert independently, not object-add). `topTools` is `{name,count}[]`, ≤5, sorted count desc / name asc. All timestamp fields are strings identical to source `SessionAgg`. `GET /api/projects?days=1&x=2` byte-equals `GET /api/projects`.
+  - landed: b961d77 — live-monitor/collector.ts, live-monitor/projects.endpoint.test.ts
 
 - [x] 1.3 Prove existing endpoints are byte-for-byte unchanged by the addition (deps: 1.1, 1.2, est: ~20m)
   - why: The whole design is "four additive touch-points, no existing path changes behavior." This is the regression guard that makes that claim true rather than asserted — without it the additive promise is untested.
   - acceptance:
     - R-1.11 — "THE SYSTEM SHALL NOT alter the response of `/api/snapshot`, `/api/stats`, `/api/session/:id`, `/api/observe/:id`, or `/events` as a result of adding `/api/projects`."
   - verify: On a fixed seeded `sessions` fixture, capture raw response bytes of `GET /api/snapshot`, `GET /api/stats?days=1`, `GET /api/session/:id`, `GET /api/observe/:id` before the change; capture again after adding `/api/projects` on the same fixture; assert byte-for-byte equality (per LLD Verification).
+  - landed: b961d77 — live-monitor/projects.endpoint.test.ts
 
 ## Unit 2: Static serving of the new page and assets
 
@@ -60,6 +64,7 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
     - R-2.3 — "IF the requested static file (`projects.html` or `projects.js`) is missing from `PUBLIC_DIR`, THE SYSTEM SHALL respond with HTTP 503 and the \"UI not built yet\" placeholder rather than 404 or an error."
     - R-2.4 — "THE SYSTEM SHALL serve the new page routes without adding any third-party dependency and SHALL start and serve identically under both Bun and Node runtimes."
   - verify: With the files present, `GET /projects` and `GET /projects.html` → 200 `text/html; charset=utf-8`; `GET /projects.js` → 200 `text/javascript; charset=utf-8`. Temporarily remove the files → those routes return 503 with the "UI not built yet" body (not 404). Start via `bun collector.ts` and via Node; in both, `GET /api/projects` returns 200 `application/json; charset=utf-8`. Confirm no package added.
+  - landed: b961d77 — live-monitor/collector.ts
 
 ## Unit 4: Projects index UI (grouping, sort, session list, deep-links)
 
@@ -75,6 +80,7 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
     - R-4.7 — "IF `/api/projects` returns an empty `projects` array, THE SYSTEM SHALL render an empty-state message and SHALL NOT error."
     - R-4.8 — "THE SYSTEM SHALL apply the page's own inline theme and layout conventions (inline `:root` variables, sticky header, panel/table idioms) consistent with the existing pages."
   - verify: Load `/projects` in a browser against a seeded server: one entry per project in endpoint order; each shows name + formatted most-recent date + session count + summed prompts/usage; sessions listed newest-first matching the endpoint order; clicking a session navigates to `/observe?session=<encoded id>` (verify `encodeURIComponent`, matching `app.js:206-215`). Point at an empty map → empty-state message renders, no console error. Confirm no edits to `observe.js`'s `?session=` handling. Visual check: inline `:root` vars + sticky header + panel/table idioms match existing pages.
+  - landed: 2835eff — live-monitor/public/projects.html, live-monitor/public/projects.js
 
 ## Unit 3: Header nav integration across all pages
 
@@ -87,3 +93,4 @@ All server edits land in the single `collector.ts` `fetch()` router; nav edits t
     - R-3.4 — "THE SYSTEM SHALL preserve the existing Dashboard, Observe, and Stats nav links unchanged when adding the Projects link."
     - R-3.5 — "THE SYSTEM SHALL render the identical set of nav links (`Dashboard`, `Observe`, `Stats`, `Projects`) with identical `href`s across all four pages, differing only in which single link carries `class=\"on\"`."
   - verify: On each of Dashboard, Observe, Stats, Projects, the nav renders exactly the four links `Dashboard/Observe/Stats/Projects` with identical hrefs (`/projects` for the new one). Only the Projects page marks "Projects" as `class="on"`; on the other three "Projects" has no `on` and each retains its own pre-existing active link. Diff each of `index.html`, `observe.js`, `stats.js` to confirm only the added link changed and existing links are untouched.
+  - landed: 66b7b1b — live-monitor/public/index.html, live-monitor/public/observe.js, live-monitor/public/stats.js
