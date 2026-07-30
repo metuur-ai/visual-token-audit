@@ -15,6 +15,10 @@ export const RING_MAX = 5000;
 export const SEED_MTIME_WINDOW_MS = 48 * 60 * 60 * 1000; // only seed files modified in last 48h
 export const RESCAN_INTERVAL_MS = 15_000; // periodic fallback rescan for new files
 export const KEEPALIVE_MS = 25_000;
+// Bun.serve idle timeout, in SECONDS (Bun's unit; 0 disables, 255 is the max).
+// Must stay above KEEPALIVE_MS or Bun closes idle SSE streams before the
+// heartbeat fires -- "[Bun.serve]: request timed out after 10 seconds".
+export const SSE_IDLE_TIMEOUT_S = 120;
 export const TEXT_SNIPPET_LEN = 140;
 
 // v2: per-session bounded line store for on-demand SessionDetail (tree/attribution).

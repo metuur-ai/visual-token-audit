@@ -20,7 +20,14 @@
 
 import { LABEL_LEN } from "./config.ts";
 import { costUSD } from "./cost.ts";
-import { StartupInventory, getStartupInventory } from "./startup-inventory.ts";
+import {
+  StartupInventory,
+  PluginCounts,
+  SkillBudget,
+  getStartupInventory,
+  skillListingBudget,
+  contextWindowForModel,
+} from "./startup-inventory.ts";
 import { observeCache, sessionLines, sessions, subagentMeta } from "./state.ts";
 import { SidechainChain, chainModel, claimChain, classifyReminder, collectSidechainChains, mcpServer, promptOf, toolNodeKind } from "./tree.ts";
 import { SessionLine } from "./types.ts";
@@ -28,7 +35,8 @@ import { basename } from "path";
 import { clip, log } from "./util.ts";
 
 export type ObsKind =
-  | "system" | "memory" | "skill" | "command" | "plugin" | "mcp" | "hook" | "tool" | "agent";
+  | "system" | "memory" | "skill" | "command" | "plugin" | "mcp" | "hook" | "tool" | "agent"
+  | "rule"; // .claude/rules/*.md — was already emitted by classifyReminder via a cast
 
 export interface ObsResource {
   k: ObsKind;
@@ -66,17 +74,31 @@ export interface CtxBreakdown {
 // Σ(categories.tk) === base exactly (residual is defined to make it so). tk uses
 // the vendored o200k tokenizer (provenance stamped); `est` if the vocab is absent.
 export interface BaseCategory {
-  k: "skill" | "agent" | "memory" | "residual";
+  k: "skill" | "agent" | "memory" | "rule" | "residual";
   label: string;
   tk: number;
   residual?: boolean;
-  items?: Array<{ n: string; tk: number; used: boolean; observable?: boolean }>;
+  // `live:false` rows are conditional rules whose globs matched no file this
+  // session — they were never injected, so their tk is EXCLUDED from the
+  // category total (Σ items.tk may exceed tk for the rule category; that is the
+  // point: it is the cost you are not paying, listed for visibility).
+  items?: Array<{
+    n: string;
+    tk: number;
+    used: boolean;
+    observable?: boolean;
+    live?: boolean;
+    paths?: string[];
+    capped?: boolean; // skills: description clamped by skillListingMaxDescChars
+  }>;
 }
 export interface BaseBreakdown {
   base: number;
   tokenizer: "o200k" | "est";
   scannedAt: string;
   categories: BaseCategory[];
+  skillBudget?: SkillBudget; // char budget for the skill listing (spec §7.6)
+  plugins?: PluginCounts; // how many installed plugins survived the enablement filter
 }
 export interface ObsNode {
   id: string;
@@ -281,6 +303,78 @@ export function obsDyn(
 }
 
 // Reconstruct `base` (turn-1 floor) from the startup inventory: itemize the
+// ----- conditional-rule resolution -------------------------------------------
+// A rule with `paths` globs is only injected when the session touches a matching
+// file. To answer that we need the files the session actually touched — from
+// EVERY line, main chain and sub-agents alike (a rule pulled in by a sub-agent's
+// Read is just as loaded as one pulled in by the root's).
+//
+// Evidence is limited to explicit path parameters on tool inputs. Paths named
+// only inside a Bash command string are deliberately NOT parsed: guessing which
+// argv token is a file produces false "live" verdicts, and a wrong yes here
+// silently inflates the base floor.
+const PATH_KEYS = ["file_path", "notebook_path", "path", "filePath"] as const;
+
+function relPath(p: string, cwd: string): string {
+  let out = p;
+  if (cwd && out.startsWith(cwd + "/")) out = out.slice(cwd.length + 1);
+  return out.replace(/^\.\//, "");
+}
+
+export function collectTouchedFiles(lines: SessionLine[], cwd: string): Set<string> {
+  const out = new Set<string>();
+  const add = (v: unknown) => {
+    if (typeof v === "string" && v) out.add(relPath(v, cwd));
+  };
+  for (const ln of lines) {
+    for (const tu of ln.toolUses) {
+      const inp = tu.input;
+      if (!inp || typeof inp !== "object") continue;
+      for (const k of PATH_KEYS) add((inp as Record<string, unknown>)[k]);
+      const ps = (inp as Record<string, unknown>).paths;
+      if (Array.isArray(ps)) for (const p of ps) add(p);
+    }
+  }
+  return out;
+}
+
+// Minimal glob → RegExp. Supports **, *, ? with the usual "* stops at /" rule.
+const globCache = new Map<string, RegExp>();
+function globToRe(glob: string): RegExp {
+  const hit = globCache.get(glob);
+  if (hit) return hit;
+  let re = "";
+  for (let i = 0; i < glob.length; i++) {
+    const c = glob[i];
+    if (c === "*") {
+      if (glob[i + 1] === "*") {
+        i++; // consume second star
+        if (i + 1 >= glob.length) re += ".*"; // trailing ** → everything below
+        else if (glob[i + 1] === "/") {
+          i++; // "a/**/b" must also match "a/b"
+          re += "(?:.*\\/)?";
+        } else re += ".*";
+      } else re += "[^/]*";
+    } else if (c === "?") re += "[^/]";
+    else if ("\\^$+.()|{}[]".includes(c)) re += "\\" + c;
+    else re += c;
+  }
+  const rx = new RegExp("^" + re + "$");
+  globCache.set(glob, rx);
+  return rx;
+}
+
+// Unconditional rule → always live. Conditional → live iff some touched file
+// matches some glob.
+export function ruleIsLive(paths: string[] | undefined, touched: Set<string>): boolean {
+  if (!paths?.length) return true;
+  for (const g of paths) {
+    const rx = globToRe(g);
+    for (const f of touched) if (rx.test(f)) return true;
+  }
+  return false;
+}
+
 // disk-recoverable categories (skills/agents/memory) and collapse the rest into
 // a single residual row. `used` joins reuse the session's invokedNames set
 // (skill|/agent|/plugin| keys), matching pre[] semantics. Memory rows are
@@ -290,15 +384,26 @@ export function buildBaseBreakdown(
   inv: StartupInventory,
   invokedNames: Set<string>,
   _cwd?: string,
+  touched: Set<string> = new Set(),
+  model?: string,
 ): BaseBreakdown {
   const sum = (a: { tk: number }[]) => a.reduce((s, x) => s + x.tk, 0);
   const skillTk = sum(inv.skills);
   const agentTk = sum(inv.agents);
   const memoryTk = sum(inv.memory);
-  const rawResidual = base - skillTk - agentTk - memoryTk;
+  // Only rules that were actually injected count against the measured floor.
+  const ruleItems = (inv.rules ?? []).map((r) => ({
+    n: r.name,
+    tk: r.tk,
+    used: invokedNames.has("rule|" + r.name),
+    live: ruleIsLive(r.paths, touched),
+    ...(r.paths?.length ? { paths: r.paths } : {}),
+  }));
+  const ruleTk = sum(ruleItems.filter((r) => r.live));
+  const rawResidual = base - skillTk - agentTk - memoryTk - ruleTk;
   if (rawResidual < 0) {
     // Negative residual signals scope/tokenizer drift (disk sum > measured base).
-    log("baseBreakdown: negative residual", { base, skillTk, agentTk, memoryTk, rawResidual });
+    log("baseBreakdown: negative residual", { base, skillTk, agentTk, memoryTk, ruleTk, rawResidual });
   }
   const residual = Math.max(0, rawResidual);
 
@@ -311,7 +416,10 @@ export function buildBaseBreakdown(
       invokedNames.has("skill|" + s.name) ||
       invokedNames.has("skill|" + base) ||
       (ns ? invokedNames.has("plugin|" + ns) : false);
-    return { n: s.name, tk: s.tk, used };
+    // `capped`: this entry's description exceeds skillListingMaxDescChars, so
+    // Claude Code clamps it — the tail never reaches the model.
+    const capped = (s.rawChars ?? 0) > inv.skillListingConfig.maxDescChars;
+    return { n: s.name, tk: s.tk, used, ...(capped ? { capped } : {}) };
   });
   const agentItems = inv.agents.map((a) => ({
     n: a.name,
@@ -329,9 +437,17 @@ export function buildBaseBreakdown(
     { k: "skill", label: "Skills", tk: skillTk, items: skillItems },
     { k: "agent", label: "Custom agents", tk: agentTk, items: agentItems },
     { k: "memory", label: "Memory files", tk: memoryTk, items: memoryItems },
+    { k: "rule", label: "Rules", tk: ruleTk, items: ruleItems },
     { k: "residual", label: "System + tools + MCP (not itemizable)", tk: residual, residual: true },
   ];
-  return { base, tokenizer: inv.tokenizer, scannedAt: inv.scannedAt, categories };
+  return {
+    base,
+    tokenizer: inv.tokenizer,
+    scannedAt: inv.scannedAt,
+    categories,
+    skillBudget: skillListingBudget(inv, contextWindowForModel(model)),
+    plugins: inv.plugins,
+  };
 }
 
 export function buildObserveSnapshot(sessionId: string): string | null {
@@ -360,6 +476,11 @@ export function buildObserveSnapshot(sessionId: string): string | null {
   const invokedNames = new Set<string>(); // "<kind>|<base name>"
   for (const ln of lines) {
     if (ln.kind === "prompt" && ln.command) invokedNames.add("command|" + ln.command);
+    // detectRules() stamps "rule:<name>" reminders on prompt lines; the name is
+    // the path relative to the rules dir, matching discoverRules() exactly.
+    for (const r of ln.reminders) {
+      if (r.startsWith("rule:")) invokedNames.add("rule|" + r.slice(5));
+    }
     if (ln.kind === "tool_result") {
       // Loader-marker skills (SKILL:/COMPANION:) count as fired too. Names are
       // normalized (loader namespace stripped), so they key on the base name.
@@ -451,11 +572,16 @@ export function buildObserveSnapshot(sessionId: string): string | null {
   // Tier 2: reconstruct the base floor from local disk (skills/agents/memory)
   // for the ROOT only — agent nodes keep pre[] evidence. getStartupInventory is
   // its own 60s-cached scan, so this stays cheap under the observeCache path.
+  // `lines`, not `main`: a conditional rule is live if ANY participant touched a
+  // matching file, and sub-agent lines (inline + dedicated agent-*.jsonl) are all
+  // in `lines`.
   root.baseBreakdown = buildBaseBreakdown(
     root.ctxBreakdown?.base ?? 0,
     getStartupInventory(agg.cwd),
     invokedNames,
     agg.cwd,
+    collectTouchedFiles(lines, agg.cwd),
+    rootModel,
   );
 
   // Invoker attribution for agent dispatches: the trigger active on main at the

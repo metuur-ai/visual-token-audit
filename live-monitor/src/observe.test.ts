@@ -8,8 +8,10 @@ const inv: StartupInventory = {
   skills: [{ name: "a", tk: 100 }, { name: "plug:b", tk: 50 }],
   agents: [{ name: "agentX", tk: 40 }],
   memory: [{ path: "/x/CLAUDE.md", tk: 200 }, { path: "/x/rules.md", tk: 60 }],
+  rules: [],
   scannedAt: "2026-07-20T00:00:00.000Z",
   tokenizer: "o200k",
+  skillListingConfig: { fraction: 0.01, maxDescChars: 1536, bytesPerToken: 4, envBudgetChars: null },
 };
 // Σ inventory = 100 + 50 + 40 + 200 + 60 = 450.
 
@@ -99,4 +101,51 @@ test("obsDyn: repeated loader markers for the same skill emit one row", () => {
     line({ ts: "t2", kind: "tool_result", toolResultFor: "b2", skillLoads: ["dup"] }),
   ];
   expect(obsDyn(lns, noResults).filter((d) => d.n === "dup")).toHaveLength(1);
+});
+
+// Rules: an "always" rule is on the base floor unconditionally, whereas a
+// conditional rule (paths[] frontmatter) is only loaded when the session
+// actually touched a matching file — so it must not be billed otherwise.
+const ruleInv: StartupInventory = {
+  ...inv,
+  skills: [],
+  agents: [],
+  memory: [],
+  rules: [
+    { name: "always.md", tk: 30, paths: [] },
+    { name: "ts-only.md", tk: 70, paths: ["**/*.ts"] },
+    { name: "py-only.md", tk: 90, paths: ["**/*.py"] },
+  ],
+};
+
+test("conditional rules bill only when a touched file matches their paths[]", () => {
+  const touched = new Set(["src/observe.ts"]);
+  const bb = buildBaseBreakdown(10_000, ruleInv, new Set(), undefined, touched);
+  const rules = bb.categories.find((c) => c.k === "rule")!;
+  const by = (n: string) => rules.items!.find((i) => i.n === n)!;
+
+  expect(by("always.md").live).toBe(true); // unconditional
+  expect(by("ts-only.md").live).toBe(true); // .ts touched
+  expect(by("py-only.md").live).toBe(false); // no .py touched
+
+  // Only live rules are charged against the floor.
+  expect(rules.tk).toBe(30 + 70);
+  const total = bb.categories.reduce((s, c) => s + c.tk, 0);
+  expect(total).toBe(10_000); // still reconciles exactly
+});
+
+test("no touched files ⇒ conditional rules are all dark, always rules remain", () => {
+  const bb = buildBaseBreakdown(10_000, ruleInv, new Set(), undefined, new Set());
+  const rules = bb.categories.find((c) => c.k === "rule")!;
+  expect(rules.tk).toBe(30);
+  expect(rules.items!.filter((i) => i.live).length).toBe(1);
+});
+
+test("rule| evidence marks a live rule as used", () => {
+  const touched = new Set(["src/observe.ts"]);
+  const invoked = new Set(["rule|ts-only.md"]);
+  const bb = buildBaseBreakdown(10_000, ruleInv, invoked, undefined, touched);
+  const rules = bb.categories.find((c) => c.k === "rule")!.items!;
+  expect(rules.find((i) => i.n === "ts-only.md")!.used).toBe(true);
+  expect(rules.find((i) => i.n === "always.md")!.used).toBe(false);
 });
