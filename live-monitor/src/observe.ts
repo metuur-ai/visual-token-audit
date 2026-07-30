@@ -386,6 +386,7 @@ export function buildBaseBreakdown(
   _cwd?: string,
   touched: Set<string> = new Set(),
   model?: string,
+  peakCtx = 0,
 ): BaseBreakdown {
   const sum = (a: { tk: number }[]) => a.reduce((s, x) => s + x.tk, 0);
   const skillTk = sum(inv.skills);
@@ -445,7 +446,7 @@ export function buildBaseBreakdown(
     tokenizer: inv.tokenizer,
     scannedAt: inv.scannedAt,
     categories,
-    skillBudget: skillListingBudget(inv, contextWindowForModel(model)),
+    skillBudget: skillListingBudget(inv, contextWindowForModel(model, peakCtx)),
     plugins: inv.plugins,
   };
 }
@@ -582,6 +583,7 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     agg.cwd,
     collectTouchedFiles(lines, agg.cwd),
     rootModel,
+    root.ctx,
   );
 
   // Invoker attribution for agent dispatches: the trigger active on main at the

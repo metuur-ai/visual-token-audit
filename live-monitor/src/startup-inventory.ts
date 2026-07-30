@@ -216,10 +216,22 @@ export function skillListingBudget(inv: StartupInventory, contextWindow: number)
   };
 }
 
+// Known window sizes, ascending. Anything larger than the last tier is used as-is.
+export const CONTEXT_WINDOW_TIERS = [SKILL_CTX_DEFAULT, 1_000_000];
+
 // Sessions on a 1M-context model get a 5x larger listing budget, which can flip
 // the verdict. Model ids carry an explicit "[1m]" marker for the long window.
-export function contextWindowForModel(model: string | undefined): number {
-  return model && model.includes("[1m]") ? 1_000_000 : SKILL_CTX_DEFAULT;
+//
+// Transcripts frequently record the plain id ("claude-opus-5") even when the
+// session ran the long window, so the marker alone under-reports. A measured
+// peak occupancy larger than the nominal window is proof of a bigger window —
+// the API cannot accept a prompt that does not fit — so promote to the smallest
+// tier that holds what was actually observed. Without this, a 1M session reads
+// as "274.2k / 200k (137%)" and every derived percentage is wrong.
+export function contextWindowForModel(model: string | undefined, measuredPeak = 0): number {
+  const nominal = model && model.includes("[1m]") ? 1_000_000 : SKILL_CTX_DEFAULT;
+  if (measuredPeak <= nominal) return nominal;
+  return CONTEXT_WINDOW_TIERS.find((t) => t >= measuredPeak) ?? measuredPeak;
 }
 
 // Read a SKILL.md, return {qualifiedName, tk} using `nsPrefix` for plugin
