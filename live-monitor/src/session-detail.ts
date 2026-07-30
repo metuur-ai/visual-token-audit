@@ -11,6 +11,7 @@
 import { LABEL_LEN, TREE_MAX_NODES } from "./config.ts";
 import { costUSD, priceFor } from "./cost.ts";
 import { sessionLines, sessions, subagentMeta } from "./state.ts";
+import { contextWindowForModel } from "./startup-inventory.ts";
 import { AgentDispatch, AutoLoad, CountMap, InvokedLoad, TreeNode, bump, chainDurationMs, chainModel, chainSubtree, chainToolCount, chainUsage, claimChain, classifyReminder, collectSidechainChains, countNodes, inputSummary, mcpServer, promptOf, ruleTokenEstimate, toolNodeKind } from "./tree.ts";
 import { Usage } from "./types.ts";
 import { clip, scaleUsage } from "./util.ts";
@@ -270,7 +271,11 @@ export function buildSessionDetail(sessionId: string): string | null {
 
   // ----- session cost + context-window estimates (v2.3) -----
   const usageByModel = new Map<string, Usage>();
+  // `peakCtx` is the comparable number (same definition the observe view uses):
+  // the fullest the window ever got on the main chain. `lastCtx` is kept as the
+  // most recent occupancy, which drops after a compaction.
   let lastCtx: { model: string; tokens: number; ts: string } | null = null;
+  let peakCtx: { model: string; tokens: number; ts: string } | null = null;
   for (const ln of lines) {
     if (!ln.usage || !ln.model) continue;
     let u = usageByModel.get(ln.model);
@@ -290,6 +295,7 @@ export function buildSessionDetail(sessionId: string): string | null {
         tokens: ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite,
         ts: ln.ts,
       };
+      if (!peakCtx || lastCtx.tokens > peakCtx.tokens) peakCtx = lastCtx;
     }
   }
   const byModel = [...usageByModel]
@@ -318,7 +324,17 @@ export function buildSessionDetail(sessionId: string): string | null {
     sessionId: agg.sessionId,
     project: agg.project,
     ...(agg.cwd ? { cwd: agg.cwd } : {}),
-    ...(lastCtx ? { context: lastCtx } : {}),
+    ...(peakCtx
+      ? {
+          context: {
+            model: peakCtx.model,
+            tokens: peakCtx.tokens,
+            ts: peakCtx.ts,
+            window: contextWindowForModel(peakCtx.model, peakCtx.tokens),
+            lastTokens: lastCtx!.tokens,
+          },
+        }
+      : {}),
     cost: { totalUSD, byModel, byCategory },
     dispatches,
     firstTs: agg.firstTs,

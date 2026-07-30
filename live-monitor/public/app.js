@@ -40,9 +40,18 @@ function fmt(n) {
   if (n === undefined || n === null) return '—';
   n = Number(n);
   if (Number.isNaN(n)) return '—';
+  if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000)     return (n / 1_000).toFixed(1) + 'k';
   return String(n);
+}
+
+// Short display name for a model id. Naive `split('-').slice(-2)` mangles ids
+// that carry a date suffix: claude-haiku-4-5-20251001 renders as "5-20251001".
+// Strip the vendor prefix and the trailing YYYYMMDD instead.
+function modelLabel(m) {
+  if (!m) return '';
+  return String(m).replace(/^claude-/, '').replace(/-\d{8}$/, '');
 }
 
 function fmtBytes(n) {
@@ -189,7 +198,7 @@ function renderSessions() {
         for (const m of models3) {
           const chip = document.createElement('span');
           chip.className = 'chip model';
-          chip.textContent = safe(m.split('-').slice(-2).join('-'));
+          chip.textContent = safe(modelLabel(m));
           chip.title = safe(m);
           td.appendChild(chip);
         }
@@ -282,7 +291,7 @@ function makeFeedItem(ev) {
     if (u.cacheRead)  parts.push('CR:' + fmt(u.cacheRead));
     if (u.cacheWrite) parts.push('CW:' + fmt(u.cacheWrite));
   }
-  if (ev.model) parts.push(ev.model.split('-').slice(-2).join('-'));
+  if (ev.model) parts.push(modelLabel(ev.model));
   if (Array.isArray(ev.tools) && ev.tools.length) parts.push(ev.tools.join(','));
   if (ev.skill)   parts.push('skill:' + ev.skill);
   if (ev.command) parts.push('cmd:' + ev.command);
@@ -787,7 +796,16 @@ function renderDetail(detail) {
   ];
   // v2.3: context-window estimate + total cost
   if (detail.context && detail.context.tokens) {
-    metaItems.push(['Context', fmt(detail.context.tokens) + ' tok']);
+    // Peak window occupancy — same definition as the observe view (input +
+    // cache read + cache write on the main chain, at its fullest). Shown
+    // against the inferred window so the raw number has a scale.
+    const cw = detail.context.window;
+    let ctxText = fmt(detail.context.tokens) + ' tok';
+    if (cw) ctxText += ' / ' + fmt(cw) + ' (' + Math.round((detail.context.tokens / cw) * 100) + '%)';
+    metaItems.push(['Peak context', ctxText]);
+    if (detail.context.lastTokens !== undefined && detail.context.lastTokens < detail.context.tokens) {
+      metaItems.push(['Now', fmt(detail.context.lastTokens) + ' tok']);
+    }
   }
   if (detail.cost && detail.cost.totalUSD > 0) {
     metaItems.push(['Est. Cost', '~$' + detail.cost.totalUSD.toFixed(2)]);
@@ -865,7 +883,7 @@ function renderDetail(detail) {
       chip.title = safe(d.model ?? '');
       row.appendChild(chip);
       if (d.model) {
-        row.appendChild(el('span', 'dispatch-model', safe(String(d.model).split('-').slice(-2).join('-'))));
+        row.appendChild(el('span', 'dispatch-model', safe(modelLabel(d.model))));
       }
       if (d.label) {
         const lbl = el('span', 'dispatch-label', safe(d.label));
@@ -968,7 +986,7 @@ function connectSSE() {
       const modelTd = existingRow.cells[8];
       modelTd.innerHTML = '';
       for (const m of top3(s.models)) {
-        const chip = el('span', 'chip model', m.split('-').slice(-2).join('-'));
+        const chip = el('span', 'chip model', modelLabel(m));
         chip.title = safe(m);
         modelTd.appendChild(chip);
       }

@@ -8,7 +8,7 @@ import { existsSync, readFileSync } from "fs";
 import { createServer } from "http";
 import { join } from "path";
 import { Readable } from "stream";
-import { KEEPALIVE_MS, startedAt } from "./config.ts";
+import { KEEPALIVE_MS, SSE_IDLE_TIMEOUT_S, startedAt } from "./config.ts";
 import { buildObserveSnapshot } from "./observe.ts";
 import { buildProjectsJSON } from "./projects-endpoint.ts";
 import { buildSessionDetail } from "./session-detail.ts";
@@ -40,7 +40,11 @@ function startServer(opts: {
 }): { port: number } {
   const bun = (globalThis as { Bun?: { serve: (o: unknown) => { port: number } } }).Bun;
   if (bun) {
-    return bun.serve(opts);
+    // Bun.serve defaults to a 10s idle timeout, which kills the /events SSE
+    // connection long before its first KEEPALIVE_MS (25s) heartbeat can reset the
+    // clock. Keep this comfortably above KEEPALIVE_MS so the heartbeat is what
+    // holds the socket open, while still reaping genuinely dead clients.
+    return bun.serve({ ...opts, idleTimeout: SSE_IDLE_TIMEOUT_S });
   }
   const nodeServer = createServer(async (req, res) => {
     try {

@@ -13,7 +13,18 @@ const POLL_MS = 5000;
 const SNAPSHOT_POLL_MS = 30000;
 const KORDER = ['system', 'memory', 'rule', 'skill', 'command', 'plugin', 'mcp', 'hook', 'tool', 'agent'];
 const COLOR = { tool: '#f97316', skill: '#d97706', command: '#7c3aed', plugin: '#0d9488', mcp: '#2563eb', agent: '#db2777', memory: '#ca8a04', system: '#6b7280', hook: '#dc2626', rule: '#155e75' };
-const REG_TABS = [['skill', 'Skills'], ['command', 'Commands'], ['rule', 'Rules'], ['plugin', 'Plugins'], ['mcp', 'MCP'], ['tool', 'Tools'], ['agent', 'Agents'], ['memory', 'Memory'], ['hook', 'Hooks']];
+// Tab labels name what the registry actually measures: transcript events, not
+// disk inventory. "Plugins" was ambiguous next to the loading panel's bundle
+// count — the registry only ever sees a plugin when one of its hooks fires.
+// "Plugins" lists installed bundles (what you enabled); "Hooks" lists every hook
+// script observed firing, attributed back to its owning bundle. A bundle with no
+// hooks still appears under Plugins — it just never shows up under Hooks.
+const REG_TABS = [['skill', 'Skills'], ['command', 'Commands'], ['rule', 'Rules'], ['bundle', 'Plugins'], ['mcp', 'MCP'], ['tool', 'Tools'], ['agent', 'Agents'], ['memory', 'Memory'], ['hook', 'Hooks']];
+// Hook scripts arrive classified as either kind depending on whether the
+// transcript exposed a plugins/<ns>/ path or a $CLAUDE_PLUGIN_ROOT reference.
+const HOOK_KINDS = ['hook', 'plugin'];
+// What the loading panel calls each kind, for the cross-link hint.
+const PRELOAD_NOUN = { skill: 'skill description', agent: 'custom agent', memory: 'memory file', rule: 'rule', bundle: 'plugin bundle' };
 
 /* ============================ helpers ============================ */
 const fmt = n => { n = n || 0; return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : '' + Math.round(n); };
@@ -48,6 +59,10 @@ const rel = iso => {
   return Math.floor(hh / 24) + 'd ago';
 };
 const base = n => String(n || '').split(' — ')[0].split(' (')[0].trim();
+// Hook rows are named "<event> <script>". The script basename is what a plugin
+// bundle declares in its hooks.json, so it is the key for ownership lookups.
+const hookScript = n =>
+  (String(n || '').match(/([A-Za-z0-9._-]+\.(?:sh|mjs|cjs|js|py|ts))/) || [])[1] || base(n);
 const shortModel = m => String(m || '?').replace(/^claude-/, '');
 const sum = (arr, f) => (arr || []).reduce((a, b) => a + (f(b) || 0), 0);
 const toolTotal = n => Object.values(n.tools || {}).reduce((a, b) => a + b, 0);
@@ -101,11 +116,27 @@ function buildModel(data) {
 }
 
 /* registry fusion (spec §4.6): declared catalogue (root pre) ⨝ fired events (dyn across tree) + tool tallies */
-function registryRows(m, kind) {
+function registryRows(m, kind, bb) {
   const tally = name => { let c = 0; m.walk(m.root, nd => { c += (nd.tools || {})[name] || 0; }); return c; };
   const tokensOf = name => { let t = 0; m.walk(m.root, nd => { t += (nd.toolTokens || {})[name] || 0; }); return t; };
+  const kinds = kind === 'hook' ? HOOK_KINDS : [kind];
   const events = [];
-  m.walk(m.root, nd => (nd.dyn || []).forEach(d => { if (d.k === kind) events.push(d); }));
+  m.walk(m.root, nd => (nd.dyn || []).forEach(d => { if (kinds.includes(d.k)) events.push(d); }));
+
+  // Installed plugin bundles, from disk — independent of whether they ever fired.
+  // Rows are keyed on declared hook scripts so "fired" is provable, not guessed.
+  if (kind === 'bundle') {
+    const hookEvents = [];
+    m.walk(m.root, nd => (nd.dyn || []).forEach(d => { if (HOOK_KINDS.includes(d.k)) hookEvents.push(d); }));
+    return ((bb && bb.plugins && bb.plugins.bundles) || []).map(b => {
+      const decl = new Set(b.hooks || []);
+      const hits = hookEvents.filter(e => decl.has(hookScript(e.n)));
+      return {
+        name: b.ns, hookCount: decl.size, hits, bodyTk: sum(hits, x => x.tk), calls: hits.length,
+        used: hits.length > 0, enabled: b.enabled !== false, skipped: !!b.skipped, isBundle: true,
+      };
+    }).sort((a, b) => b.bodyTk - a.bodyTk || b.hookCount - a.hookCount || a.name.localeCompare(b.name));
+  }
 
   if (kind === 'agent') {
     // catalogue is the tree itself: group agent nodes by name
@@ -119,16 +150,23 @@ function registryRows(m, kind) {
     return Object.values(g).sort((a, b) => b.bodyTk - a.bodyTk);
   }
 
-  const rows = (m.root.pre || []).filter(p => p.k === kind).map(d => {
+  // Which bundle declares each hook script, so an observed hook can name its owner.
+  const owners = new Map();
+  if (kind === 'hook')
+    for (const b of (bb && bb.plugins && bb.plugins.bundles) || [])
+      for (const h of b.hooks || []) owners.set(h, b.ns);
+  const ownerOf = n => (kind === 'hook' ? owners.get(hookScript(n)) || null : undefined);
+
+  const rows = (m.root.pre || []).filter(p => kinds.includes(p.k)).map(d => {
     const key = base(d.n);
     const hits = events.filter(e => base(e.n) === key);
     const tallied = tally(key);
     const calls = (kind === 'tool' || kind === 'mcp') ? (tallied || hits.length) : hits.length;
-    return { name: key, descTk: d.tk || 0, est: !!d.est, hits, bodyTk: sum(hits, x => x.tk), calls, used: !!(hits.length || calls || d.used) };
+    return { name: key, descTk: d.tk || 0, est: !!d.est, hits, bodyTk: sum(hits, x => x.tk), calls, used: !!(hits.length || calls || d.used), owner: ownerOf(d.n) };
   });
   const push = (key, hits, calls) => {
     if (rows.some(r => r.name === key)) return;
-    rows.push({ name: key, descTk: 0, hits, bodyTk: sum(hits, x => x.tk), calls, used: !!(calls || hits.length), runtimeOnly: true });
+    rows.push({ name: key, descTk: 0, hits, bodyTk: sum(hits, x => x.tk), calls, used: !!(calls || hits.length), runtimeOnly: true, owner: ownerOf(key) });
   };
   // runtime-only rows: fired without a preload record
   const seen = new Set();
@@ -337,39 +375,114 @@ function AggregatePanel({ n, m, scope }) {
   </section>`;
 }
 
-function RegistryPanel({ m, reg, setReg }) {
-  const rows = useMemo(() => registryRows(m, reg), [m, reg]);
+// The registry is transcript-scoped and the loading panel is disk-scoped, so a
+// resource can legitimately be 0 here and non-zero there: a rule inlined into
+// the system prompt never "fires", and a plugin bundle only shows up if one of
+// its hooks runs. Pull the startup counts across so the two panels explain each
+// other instead of looking contradictory. Rules with `live:false` were never
+// injected, so they don't count as preloaded.
+function preloadedHints(bb) {
+  const out = {};
+  if (!bb) return out;
+  for (const c of bb.categories || []) {
+    if (!PRELOAD_NOUN[c.k]) continue;
+    const nn = (c.items || []).filter(it => it.live !== false).length;
+    if (nn) out[c.k] = nn;
+  }
+  // Count distinct bundles, not enablement entries: the same plugin can be
+  // enabled from two marketplaces, which inflates `enabled` above the number of
+  // rows we actually render and makes the badge look wrong.
+  if (bb.plugins && bb.plugins.bundles && bb.plugins.bundles.length) {
+    out.bundle = bb.plugins.bundles.length;
+  } else if (bb.plugins && bb.plugins.enabled) {
+    out.bundle = bb.plugins.enabled;
+  }
+  return out;
+}
+const plural = (n, w) => `${n} ${w}${n === 1 ? '' : 's'}`;
+
+function RegistryPanel({ n, m, reg, setReg }) {
+  const bb = n && n.baseBreakdown;
+  const rows = useMemo(() => registryRows(m, reg, bb), [m, reg, bb]);
+  const hints = useMemo(() => preloadedHints(bb), [bb]);
   const isSkill = reg === 'skill', isTool = reg === 'tool' || reg === 'mcp', isAgent = reg === 'agent';
+  const isBundle = reg === 'bundle', isHook = reg === 'hook';
   const head = isAgent
     ? ['Agent', 'Dispatches', 'Subtree tokens', 'Status', 'Dispatched by', 'First dispatch']
     : isSkill
     ? ['Skill', 'Description (always loaded)', 'Body (on invoke)', 'Status', 'Invoked by', 'First load']
     : isTool
     ? [reg === 'mcp' ? 'MCP tool' : 'Tool', 'Preloaded', 'Result tokens', 'Status', 'Called by', 'First use']
+    : isBundle
+    ? ['Plugin bundle', 'Hooks declared', 'Hook tokens', 'Status', 'Hooks fired', 'First fire']
+    : isHook
+    ? ['Hook script', 'Preloaded', 'Runtime tokens', 'Status', 'From plugin', 'First fire']
     : ['Resource', 'Preloaded', 'Runtime tokens', 'Status', 'Triggered by', 'First use'];
   return html`<section class="panel fade">
-    <div class="ph"><span class="pt">Resource registry</span><span class="psub">what was available · what was actually touched · session-scoped</span></div>
+    <div class="ph"><span class="pt">Resource registry</span><span class="psub">${isBundle
+      ? 'plugin bundles installed and enabled for this project · hook activity comes from the transcript'
+      : 'what registered or fired in this transcript · not what is installed on disk'}</span></div>
     <div class="tabs">${REG_TABS.map(([k, l]) => {
-      const rs = registryRows(m, k), un = rs.filter(r => !r.used).length;
-      return html`<button class=${reg === k ? 'on' : ''} onClick=${() => setReg(k)}>${l}<span class="n">${rs.length}</span>${un ? html`<span class="n" style="background:#fef3c7;color:#92400e">${un} unused</span>` : null}</button>`;
+      const rs = registryRows(m, k), un = rs.filter(r => !r.used).length, pre = hints[k];
+      const tip = `${rs.length} registered or fired in this transcript${pre ? ` · ${plural(pre, PRELOAD_NOUN[k])} preloaded at startup (loading panel)` : ''}`;
+      return html`<button class=${reg === k ? 'on' : ''} onClick=${() => setReg(k)} title=${tip}>${l}<span class="n">${rs.length} seen</span>${un ? html`<span class="n" style="background:#fef3c7;color:#92400e">${un} unused</span>` : null}${pre ? html`<span class="n" style="background:transparent;color:var(--faint);padding:0">${pre} preloaded ↓</span>` : null}</button>`;
     })}</div>
-    ${rows.length === 0 ? html`<div class="empty">nothing of kind “${reg}” registered or fired in this session</div>` : html`
+    ${rows.length === 0 ? html`<div class="empty">nothing of kind “${reg}” registered or fired in this session${hints[reg] ? html` — but ${plural(hints[reg], PRELOAD_NOUN[reg])} ${hints[reg] === 1 ? 'is' : 'are'} preloaded into the system prompt at startup (see the Loading panel below); preloaded ≠ fired.` : null}</div>` : html`
     <table><thead><tr>${head.map((hh, i) => html`<th class=${i > 0 && i < 3 ? 'r' : ''}>${hh}</th>`)}</tr></thead>
     <tbody>${rows.map(r => {
-      const who = [...new Set((r.hits || []).map(x => x.by).filter(Boolean))].join(', ');
+      const who = isBundle
+        ? [...new Set((r.hits || []).map(x => hookScript(x.n)))].join(', ')
+        : [...new Set((r.hits || []).map(x => x.by).filter(Boolean))].join(', ');
       const first = r.hits && r.hits.length ? clock(r.hits.reduce((a, b) => (a.at < b.at ? a : b)).at) : '';
-      return html`<tr class=${r.used ? '' : 'waste'}>
-        <td><span class="b b-${reg}">${reg}</span> <b>${r.name}</b>${r.runtimeOnly ? html` <span class="mut">· runtime only</span>` : null}</td>
-        <td class="r num mut">${isAgent ? (r.calls || '—') : (r.descTk ? (r.est ? '~' : '') + fmt(r.descTk) : '—')}</td>
+      // A bundle that never fired a hook is not waste — it still ships skills and
+      // commands into the prompt. Only flag rows whose cost we can actually see.
+      return html`<tr class=${r.used || isBundle ? '' : 'waste'}>
+        <td><span class="b b-${isBundle ? 'plugin' : reg}">${isBundle ? 'plugin' : reg}</span> <b>${r.name}</b>${r.runtimeOnly ? html` <span class="mut">· runtime only</span>` : null}</td>
+        <td class="r num mut">${isBundle ? (r.hookCount || '—') : isAgent ? (r.calls || '—') : (r.descTk ? (r.est ? '~' : '') + fmt(r.descTk) : '—')}</td>
         <td class="r num">${isAgent ? fmt(r.bodyTk) : isTool ? (r.resultTk ? fmt(r.resultTk) : '—') : (r.bodyTk ? fmt(r.bodyTk) : '—')}</td>
-        <td>${r.used
+        <td>${isBundle
+          ? (r.skipped ? html`<span class="warn">✗ skipped</span>`
+            : r.used ? html`<span class="ok">✓ hooks fired ×${r.hits.length}</span>`
+            : html`<span class="mut">enabled · ${r.hookCount ? 'no hooks fired' : 'declares no hooks'}</span>`)
+          : r.used
           ? html`<span class="ok">✓ ${isAgent ? 'dispatched ×' + r.calls : isTool ? 'used' + (r.calls ? ' ×' + r.calls : '') : 'invoked ×' + (r.hits.length || r.calls)}</span>`
           : html`<span class="warn">✗ never used</span>${r.descTk ? html` <span class="mut">· ${fmt(r.descTk)} tok/turn wasted</span>` : null}`}</td>
-        <td class="who">${who || html`<span class="mut">—</span>`}</td>
+        <td class="who">${isHook
+          ? (r.owner ? r.owner : html`<span class="mut">user settings</span>`)
+          : who || html`<span class="mut">—</span>`}</td>
         <td class="mut num">${first || '—'}</td></tr>`;
     })}</tbody></table>`}
-    ${isSkill ? html`<div class="lp-d" style="margin:9px 0 0">Skills load in two stages: the <b>description</b> sits in context from startup so the model knows the skill exists; the <b>body</b> only arrives when the skill is actually invoked. Unused skills still cost their description on every single turn.</div>` : null}
+    ${isBundle ? html`<div class="lp-d wide" style="margin:9px 0 0">Every plugin bundle enabled for this project, read from disk — a bundle appears here whether or not it has hooks. Most of a bundle’s cost is the skills, commands and agents it contributes at startup (see the Loading panel); hooks are only the part that fires mid-session. “Hooks fired” names the individual scripts — the <b>Hooks</b> tab lists them one per row.${
+      bb && bb.plugins && bb.plugins.enabled > rows.length
+        ? html` Your settings hold ${bb.plugins.enabled} enablement entries for these ${rows.length} bundles — the same plugin is enabled from more than one marketplace, and it is only installed once.`
+        : null}</div>` : null}
+    ${isHook ? html`<div class="lp-d wide" style="margin:9px 0 0">Individual hook scripts observed firing in this transcript. “From plugin” resolves each script against the <code>hooks.json</code> of every installed bundle; a script with no owner was registered directly in your own <code>settings.json</code>. One bundle can fire many scripts, so these rows outnumber the bundles that own them.</div>` : null}
+    ${isSkill ? html`<div class="lp-d wide" style="margin:9px 0 0">Skills load in two stages: the <b>description</b> sits in context from startup so the model knows the skill exists; the <b>body</b> only arrives when the skill is actually invoked. Unused skills still cost their description on every single turn.</div>` : null}
   </section>`;
+}
+
+// Claude Code truncates the skill listing when it exceeds a fraction of the
+// context window (chars, not tokens). Skills past the cut are dropped silently.
+function pluginScope(p) {
+  if (!p) return null;
+  // Count the bundles we actually resolved on disk, not settings.json enablement
+  // entries — an entry can name a bundle that was never installed, which made this
+  // read "16/16 enabled" next to 15 bundle rows.
+  const b = p.bundles || [];
+  const installed = b.length || p.installed, enabled = b.length ? b.filter(x => x.enabled !== false).length : p.enabled;
+  const phantom = Math.max(0, (p.enabled || 0) - enabled);
+  return html` · <span class="mut">plugin bundles: ${enabled}/${installed} enabled${p.skipped ? html` · <span class="warn">${p.skipped} bundle${p.skipped > 1 ? 's' : ''} skipped</span>` : ''}${phantom ? html` · <span class="warn" title="enabled in settings.json but no install record on disk">${phantom} enabled but not installed</span>` : ''}</span>`;
+}
+
+function skillBudgetRow(sb) {
+  if (!sb) return null;
+  const cw = sb.contextWindow >= 1_000_000 ? '1M' : fmt(sb.contextWindow);
+  const src = sb.config.envBudgetChars ? 'SLASH_COMMAND_TOOL_CHAR_BUDGET' : `${(sb.config.fraction * 100).toFixed(1)}% of ${cw} window`;
+  return html`<div class="stat">
+    <b class=${sb.fits ? 'ok' : 'warn'}>${fmt(sb.chars)}</b> of ${fmt(sb.budgetChars)} listing chars${' '}
+    <span class=${sb.fits ? 'ok' : 'warn'}>${sb.fits ? `fits · ${Math.round(sb.utilPct)}% used` : `over budget by ${fmt(sb.overBy)} chars — skills past the cut are dropped`}</span>${' '}
+    <span class="mut">· ${src}${sb.cappedEntries ? ` · ${sb.cappedEntries} description${sb.cappedEntries > 1 ? 's' : ''} clamped to ${sb.config.maxDescChars} chars` : ''}</span>
+  </div>`;
 }
 
 function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, toggleGrp }) {
@@ -390,8 +503,13 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
   const bb = n.baseBreakdown;
   const usedOf = it => it.observable === false ? true : !!it.used;               // memory never wasted
   const catColor = k => k === 'residual' ? '#6b7280' : (COLOR[k] || '#6b7280');  // skill/agent/memory from COLOR
-  const catShort = { skill: 'skills', agent: 'agents', memory: 'memory', residual: 'system + tools + mcp' };
-  const passF = it => preF === 'all' || (preF === 'used' && usedOf(it)) || (preF === 'unused' && !usedOf(it));
+  const catShort = { skill: 'skills', agent: 'agents', memory: 'memory', rule: 'rules', residual: 'system + tools + mcp' };
+  // A conditional rule (paths[] frontmatter) whose globs never matched a file the
+  // session touched was never injected — it costs 0 here, so it is neither "used"
+  // nor waste. Keep it visible under `all` so the drill-down still explains the gap
+  // between a rule file on disk and the tokens actually billed.
+  const dormantOf = it => it.live === false;
+  const passF = it => preF === 'all' || (!dormantOf(it) && ((preF === 'used' && usedOf(it)) || (preF === 'unused' && !usedOf(it))));
   const bbBase = bb ? (bb.base || floor || 0) : 0;
   const itemizable = bb ? bb.categories.filter(c => c.k === 'skill' || c.k === 'agent').flatMap(c => c.items || []) : [];
   const itemTk = sum(itemizable, i => i.tk);
@@ -401,11 +519,13 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
     <div class="lp">
       <div class="lp-col">
         <div class="lp-h"><span class="lp-t">Auto-loaded at startup</span><span class="chip">always in context</span></div>
-        <div class="lp-d">Present before the first token. Paid for on every turn whether or not the model touched it.</div>
+        <div class="lp-d wide">Present before the first token. Paid for on every turn whether or not the model touched it.</div>
         ${bb ? html`
         <div class="stat"><b>${fmt(floor)}</b> preloaded floor <span class="mut">· system prompt + tool schemas + skill/agent descriptions + memory (comparable to /context)</span></div>
-        <div class="lp-d" style="margin:3px 0 5px">Reconstructed from local skill/agent/memory files (${bb.tokenizer === 'o200k' ? 'o200k tokenizer' : 'estimated ÷4'}) — descriptions only; may drift from session-time state. System prompt, system tools and MCP schemas aren't itemizable and fold into the residual row.</div>
-        <div class="stat">${itemizable.length} skill/agent descriptions itemized${itemTk ? html` · <span class="warn">${fmt(bbWaste)} never used</span>` : null}</div>
+        <div class="lp-d wide" style="margin:3px 0 5px">Reconstructed from local skill/agent/memory/rule files (${bb.tokenizer === 'o200k' ? 'o200k tokenizer' : 'estimated ÷4'}) — skill and agent bodies count as descriptions only; rules count in full, but a path-scoped rule only counts when the session touched a file it matches. May drift from session-time state. System prompt, system tools and MCP schemas aren't itemizable and fold into the residual row.</div>
+        <div class="lp-d wide" style="margin:0 0 5px">Only the description is preloaded — a skill's body loads only when it's used, so long reference material costs almost nothing until you need it.</div>
+        <div class="stat">${itemizable.length} skill/agent descriptions itemized${itemTk ? html` · <span class="warn">${fmt(bbWaste)} never used</span>` : null}${pluginScope(bb.plugins)}</div>
+        ${skillBudgetRow(bb.skillBudget)}
         <div class="stack">${bb.categories.map(c => html`<div style="width:${bbBase ? c.tk / bbBase * 100 : 0}%;background:${catColor(c.k)}"></div>`)}</div>
         <div class="legend">${bb.categories.map(c => html`<span><i style="background:${catColor(c.k)}"></i>${catShort[c.k] || c.label}</span>`)}</div>
         <div class="rows">${bb.categories.map(c => {
@@ -417,16 +537,25 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
         <div class="scroll">
           ${bb.categories.filter(c => !c.residual).map(c => {
             const items = (c.items || []).slice().sort((a, b) => b.tk - a.tk).filter(passF);
-            const t = sum(items, i => i.tk), un = items.filter(i => !usedOf(i)).length;
+            const billed = items.filter(i => !dormantOf(i));
+            // Dormant items are listed but not billed, so the header total keeps
+            // matching the category row above it.
+            const t = sum(billed, i => i.tk), un = billed.filter(i => !usedOf(i)).length;
+            const dz = items.length - billed.length;
             const isOpen = grpOpen.has(c.k);
             return html`<div class="grp">
               <div class="grp-h" onClick=${() => toggleGrp(c.k)}>
                 <span class="tw ${isOpen ? 'open' : ''}">▶</span><span class="b b-${c.k}">${c.k}</span>
                 <span>${items.length}</span>${un ? html`<span class="warn">${un} unused</span>` : html`<span class="ok">all used</span>`}
+                ${dz ? html`<span class="mut">${dz} not loaded</span>` : null}
                 <span class="c num">${fmt(t)} tok</span></div>
-              <div class="grp-b ${isOpen ? '' : 'hide'}">${items.length === 0 ? html`<div class="empty">no ${c.k} items match this filter</div>` : items.map(it => html`<div class="res ${usedOf(it) ? '' : 'is-unused'}">
-                <span class="dot ${usedOf(it) ? 'used' : 'unused'}"></span><span class="nm" title=${it.n}>${it.n}</span>
-                <span class="tk num">${fmt(it.tk)}</span></div>`)}</div>
+              <div class="grp-b ${isOpen ? '' : 'hide'}">${items.length === 0 ? html`<div class="empty">no ${c.k} items match this filter</div>` : items.map(it => dormantOf(it)
+                ? html`<div class="res" title=${(it.paths || []).join(', ')}>
+                    <span class="dot" style="background:#6b7280"></span><span class="nm mut" title=${it.n}>${it.n}</span>
+                    <span class="tk num mut">0 <span class="mut">· ${fmt(it.tk)} if triggered</span></span></div>`
+                : html`<div class="res ${usedOf(it) ? '' : 'is-unused'}">
+                    <span class="dot ${usedOf(it) ? 'used' : 'unused'}"></span><span class="nm" title=${it.n}>${it.n}</span>
+                    <span class="tk num">${fmt(it.tk)}</span></div>`)}</div>
             </div>`;
           })}
           ${bb.categories.filter(c => c.residual).map(c => html`<div class="res" title=${c.label}>
@@ -461,7 +590,7 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
       </div>
       <div class="lp-col">
         <div class="lp-h"><span class="lp-t">Invoked during execution</span><span class="chip">on demand</span></div>
-        <div class="lp-d">Pulled in mid-run because something asked. Each row records who triggered it and when.</div>
+        <div class="lp-d wide">Pulled in mid-run because something asked. Each row records who triggered it and when.</div>
         <div class="stat"><b>${fmt(dynTot)}</b> tokens invoked · ${dynAll.length} events</div>
         <div class="filters">${[['all', 'all'], ['self', 'this agent'], ['desc', 'descendants']].map(([f, l]) =>
           html`<button class=${dynF === f ? 'on' : ''} onClick=${() => setDynF(f)}>${l}</button>`)}</div>
@@ -713,7 +842,7 @@ function App() {
         <${ContextPanel} n=${n} m=${m} />
         <${AggregatePanel} n=${n} m=${m} scope=${scope} />
       </div>
-      <${RegistryPanel} m=${m} reg=${reg} setReg=${setReg} />
+      <${RegistryPanel} n=${n} m=${m} reg=${reg} setReg=${setReg} />
       <${LoadingPanel} n=${n} m=${m} scope=${scope} preF=${preF} setPreF=${setPreF} dynF=${dynF} setDynF=${setDynF} grpOpen=${grpOpen} toggleGrp=${toggleGrp} />
       <${UsagePanel} n=${n} m=${m} scope=${scope} />
       <${Timeline} m=${m} sel=${selId} onSel=${onSel} />
