@@ -3,6 +3,10 @@
   "version": "0.2.4",
   "description": "Zero-dependency live monitor for Claude Code session transcripts (HTTP + SSE dashboard).",
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/metuur/claude-live-monitor.git"
+  },
   "bin": {
     "claude-live-monitor": "bin/cli.js"
   },
