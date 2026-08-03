@@ -86,23 +86,51 @@ function Spark({ byDay, color }) {
 
 /* ============================ ranked column ============================ */
 const COLK = { skill: '#92400e', cmd: '#6d28d9', agent: '#be185d', rule: '#155e75', tool: '#1d4ed8', mcp: '#15803d', plugin: '#b45309' };
-function RankCol({ title, kind, items, delay }) {
-  const max = Math.max(1, ...(items || []).map(i => i.count || 0));
-  return html`<section class="panel col k-${kind} fade" style="animation-delay:${delay}ms">
-    <div class="ph"><span class="pt">${title}</span><span class="psub">${(items || []).length} · by runs</span></div>
-    ${!items || items.length === 0 ? html`<div class="empty">nothing recorded in this window</div>` :
-    items.slice(0, 10).map((it, i) => html`<div class="rk" key=${it.name}>
-      <span class="i">${i + 1}</span>
-      <div class="body">
-        <div class="nm" title=${it.name}>${it.name}</div>
-        <div class="sub">
-          <div class="bar"><i style="width:${Math.max(2, (it.count / max) * 100)}%"></i></div>
-          <span class="ls">${rel(it.lastUsed)}</span>
-        </div>
+function RankRow({ it, i, max, kind }) {
+  return html`<div class="rk" key=${it.name}>
+    <span class="i">${i + 1}</span>
+    <div class="body">
+      <div class="nm" title=${it.name}>${it.name}</div>
+      <div class="sub">
+        <div class="bar"><i style="width:${Math.max(2, (it.count / max) * 100)}%"></i></div>
+        <span class="ls">${rel(it.lastUsed)}</span>
       </div>
-      <${Spark} byDay=${it.byDay} color=${COLK[kind]} />
-      <span class="ct">${int(it.count)}<small>${it.sessions || 0} sess${it.tokens ? ' · ' + fmt(it.tokens) : ''}</small></span>
-    </div>`)}
+    </div>
+    <${Spark} byDay=${it.byDay} color=${COLK[kind]} />
+    <span class="ct">${int(it.count)}<small>${it.sessions || 0} sess${it.tokens ? ' \u00b7 ' + fmt(it.tokens) : ''}</small></span>
+  </div>`;
+}
+
+const TOP = 30, SHOWN = 10;
+
+function RankModal({ title, kind, items, max, onClose }) {
+  useEffect(() => {
+    const k = e => { if (e.key === 'Escape') onClose(); };
+    addEventListener('keydown', k);
+    return () => removeEventListener('keydown', k);
+  }, [onClose]);
+  return html`<div class="ov k-${kind}" onClick=${onClose}>
+    <div class="modal" onClick=${e => e.stopPropagation()}>
+      <div class="mhead">
+        <span class="pt">${title}</span>
+        <span class="psub">top ${items.length} \u00b7 by runs</span>
+        <button class="x" onClick=${onClose} title="close">\u2715</button>
+      </div>
+      ${items.map((it, i) => html`<${RankRow} it=${it} i=${i} max=${max} kind=${kind} />`)}
+    </div>
+  </div>`;
+}
+
+function RankCol({ title, kind, items, delay }) {
+  const [open, setOpen] = useState(false);
+  const all = (items || []).slice(0, TOP);
+  const max = Math.max(1, ...all.map(i => i.count || 0));
+  return html`<section class="panel col k-${kind} fade" style="animation-delay:${delay}ms">
+    <div class="ph"><span class="pt">${title}</span><span class="psub">${(items || []).length} \u00b7 by runs</span></div>
+    ${all.length === 0 ? html`<div class="empty">nothing recorded in this window</div>` :
+    all.slice(0, SHOWN).map((it, i) => html`<${RankRow} it=${it} i=${i} max=${max} kind=${kind} />`)}
+    ${all.length > SHOWN ? html`<button class="more" onClick=${() => setOpen(true)}>show all ${all.length} \u2192</button>` : null}
+    ${open ? html`<${RankModal} title=${title} kind=${kind} items=${all} max=${max} onClose=${() => setOpen(false)} />` : null}
   </section>`;
 }
 

@@ -41,7 +41,10 @@ a{color:inherit;text-decoration:none}
 main{max-width:1180px;margin:0 auto;padding:26px 22px 90px}
 
 /* ---------- staggered load ---------- */
-.fade{animation:f .4s cubic-bezier(.2,.7,.3,1) both}
+/* fill-mode is `backwards` (not `both`) on purpose: a forwards-filled transform
+   leaves an identity matrix on the panel, which makes it a containing block and
+   traps the modal's position:fixed overlay inside the panel. */
+.fade{animation:f .4s cubic-bezier(.2,.7,.3,1) backwards}
 @keyframes f{from{opacity:0;transform:translateY(7px)}to{opacity:1;transform:none}}
 
 /* ---------- hero ---------- */
@@ -90,6 +93,16 @@ main{max-width:1180px;margin:0 auto;padding:26px 22px 90px}
 .k-mcp .bar i{background:var(--mcp-f)} .k-mcp .pt{color:var(--mcp-f)}
 .k-plugin .bar i{background:var(--plugin-f)} .k-plugin .pt{color:var(--plugin-f)}
 .empty{font-size:10.5px;color:var(--faint);padding:14px 6px}
+.more{display:block;width:100%;text-align:center;font-size:10px;color:var(--dim);padding:7px 0 2px;margin-top:4px;border-top:1px solid var(--line-2)}
+.more:hover{color:var(--blue)}
+
+/* ---------- modal ---------- */
+.ov{position:fixed;inset:0;z-index:50;background:rgba(28,25,23,.34);display:flex;align-items:flex-start;justify-content:center;padding:48px 20px;overflow:auto;animation:f .16s ease both}
+.modal{background:#fff;border:1px solid var(--line);border-radius:10px;width:100%;max-width:560px;box-shadow:0 18px 50px rgba(28,25,23,.22);padding:16px 18px 14px}
+.modal .ph{margin-bottom:10px}
+.modal .x{font-size:14px;color:var(--faint);line-height:1;padding:2px 4px}
+.modal .x:hover{color:var(--txt)}
+.mhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;margin-bottom:10px}
 
 /* ---------- models footer ---------- */
 .models{display:flex;gap:9px;flex-wrap:wrap;align-items:center}

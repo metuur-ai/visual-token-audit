@@ -37,6 +37,26 @@ const shortSid = id => (String(id || '').length > 12 ? String(id).slice(0, 8) + 
 const usageTok = u => (u ? (u.input || 0) + (u.output || 0) + (u.cacheRead || 0) + (u.cacheWrite || 0) : 0);
 const sessionHref = id => '/observe?session=' + encodeURIComponent(id);
 
+/* ============================ search ============================ */
+/* Pure, null-safe match predicate — see docs/ears/projects-static-search.md Unit 2.
+   Matches a literal, case-insensitive substring against name, cwd, and top-tool
+   names only. Never touches sessions, keys, timestamps, or numeric usage fields.
+   Returns { hit, toolHits }; toolHits is populated ONLY when the match came
+   solely from tool names, so the card can explain an otherwise invisible hit. */
+const lc = v => (typeof v === 'string' ? v.toLowerCase() : '');
+
+function matchProject(p, query) {
+  const q = lc(typeof query === 'string' ? query.trim() : '');
+  if (!q) return { hit: true, toolHits: [] };
+  const r = p || {};
+  if (lc(r.name).includes(q) || lc(r.cwd).includes(q)) return { hit: true, toolHits: [] };
+  const toolHits = (Array.isArray(r.topTools) ? r.topTools : [])
+    .slice(0, 5)                                   // R-2.12 — top-5 only
+    .filter(t => t && lc(t.name).includes(q))
+    .map(t => t.name);
+  return { hit: toolHits.length > 0, toolHits };
+}
+
 /* ============================ nav ============================ */
 const Nav = () => html`<nav class="nav">
   <a href="/">Dashboard</a>
@@ -90,6 +110,9 @@ function App() {
   const [err, setErr] = useState(null);
   const [stale, setStale] = useState(false);
   const [days, setDays] = useState(30);
+  /* Ephemeral by design: never mirrored to the URL, sessionStorage, or localStorage,
+     and deliberately absent from the refresh effect's dep array below. */
+  const [q, setQ] = useState('');
 
   const load = () => fetch('/api/projects?days=' + days)
     .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
@@ -106,6 +129,9 @@ function App() {
     <span class="logo">Historical Session By Project</span>
     <${Nav} />
     <span class="gen">${data ? `${data.projects.length} project${data.projects.length === 1 ? '' : 's'} · last ${data.days || days} days` : ''}</span>
+    <input class="psearch" type="search" value=${q} onInput=${e => setQ(e.target.value)}
+      placeholder="filter projects…"
+      aria-label="Search projects by name, path, or top tools — tool matching covers each project's top 5 tools only" />
     <div class="seg">
       <button class=${days === 7 ? 'on' : ''} onClick=${() => setDays(7)}>7d</button>
       <button class=${days === 30 ? 'on' : ''} onClick=${() => setDays(30)}>30d</button>
@@ -130,9 +156,26 @@ function App() {
     <div>no sessions found in the last ${data.days || days} days — start a Claude Code session and they'll appear here.</div>
   </div></main>`;
 
+  /* Derived during render (R-5.4), never stored — the filtered list therefore
+     cannot drift from the most recently fetched data. Server order preserved. */
+  const qq = q.trim();
+  const shown = data.projects.map(p => ({ p, m: matchProject(p, qq) })).filter(x => x.m.hit);
+
+  const banner = stale ? html`<div class="banner">refresh failed (${err}) — showing last good data</div>` : null;
+
+  /* Distinct from "no projects yet" above: the data is there, the query hid it. */
+  if (!shown.length) return html`${top}<main>
+    ${banner}
+    <div class="state">
+      <div class="big-msg">no matching projects</div>
+      <div>none of the ${data.projects.length} project${data.projects.length === 1 ? '' : 's'} in the last ${data.days || days} days match “${qq}”.</div>
+      <button onClick=${() => setQ('')}>clear search</button>
+    </div>
+  </main>`;
+
   return html`${top}<main>
-    ${stale ? html`<div class="banner">refresh failed (${err}) — showing last good data</div>` : null}
-    ${data.projects.map((p, i) => html`<${ProjectCard} key=${p.key} p=${p} delay=${Math.min(i, 8) * 40} />`)}
+    ${banner}
+    ${shown.map(({ p }, i) => html`<${ProjectCard} key=${p.key} p=${p} delay=${Math.min(i, 8) * 40} />`)}
   </main>`;
 }
 
