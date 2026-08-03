@@ -1,6 +1,6 @@
 {
   "name": "@metuur/claude-live-monitor",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Zero-dependency live monitor for Claude Code session transcripts (HTTP + SSE dashboard).",
   "type": "module",
   "bin": {
