@@ -4,6 +4,13 @@ A zero-dependency [Bun](https://bun.sh) server that tails your Claude Code
 session transcripts in real time and exposes them over HTTP + Server-Sent Events
 for the dashboard UI.
 
+## Install Globally
+
+```sh
+npm install -g @metuur/claude-live-monitor
+
+```
+
 ## Run
 
 Anywhere with **Node ≥18** (no Bun needed):

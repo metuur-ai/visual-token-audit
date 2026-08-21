@@ -1,11 +1,11 @@
 {
   "name": "@metuur/claude-live-monitor",
-  "version": "0.2.4",
+  "version": "0.2.6",
   "description": "Zero-dependency live monitor for Claude Code session transcripts (HTTP + SSE dashboard).",
   "type": "module",
   "repository": {
     "type": "git",
-    "url": "https://github.com/metuur/claude-live-monitor.git"
+    "url": "https://github.com/metuur-ai/visual-token-audit"
   },
   "bin": {
     "claude-live-monitor": "bin/cli.js"

@@ -55,15 +55,29 @@
   /* ── Main body ── */
   #main {
     display: grid;
-    grid-template-columns: 55% 1fr;
+    grid-template-columns: var(--split, 55%) 5px 1fr;
     gap: 0;
     height: calc(100vh - 52px);
     overflow: hidden;
   }
   /* When detail is open: sessions stay left, detail replaces right */
   #main.detail-open {
-    grid-template-columns: 42% 1fr;
+    grid-template-columns: var(--split-detail, 42%) 5px 1fr;
   }
+
+  /* ── Drag splitter ── */
+  #splitter {
+    cursor: col-resize;
+    background: var(--border);
+    position: relative;
+    flex-shrink: 0;
+  }
+  #splitter::after {           /* widen the grab area without widening the line */
+    content: ''; position: absolute; inset: 0 -4px;
+  }
+  #splitter:hover, #splitter:focus-visible, #splitter.dragging { background: var(--accent); outline: none; }
+  body.resizing { cursor: col-resize; user-select: none; }
+  body.resizing iframe { pointer-events: none; }
 
   /* ── Panel shared ── */
   .panel { display: flex; flex-direction: column; overflow: hidden; }
@@ -104,18 +118,28 @@
   tr.clickable:hover td { background: #eff6ff; }
   tr.selected td { background: #dbeafe !important; }
 
-  /* column widths */
-  col.c-proj  { width: 14%; }
-  col.c-sess  { width: 10%; }
-  col.c-prpts { width: 7%; }
-  col.c-in    { width: 9%; }
-  col.c-out   { width: 9%; }
-  col.c-cr    { width: 9%; }
-  col.c-cw    { width: 9%; }
-  col.c-tools { width: 18%; }
-  col.c-mdl   { width: 10%; }
-  col.c-last  { width: 8%; }
-  col.c-obs   { width: 7%; }
+  /* column widths.
+     Project is the only `auto` column: it soaks up whatever the sized columns
+     leave over, so collapsing columns (see the @container rules) widens Project
+     instead of stretching the Observe cell.
+
+     The metric columns are px, not %: their content is a fixed-length token
+     count ("855.8k", "167.7M"), so a percentage just shrank them below their
+     own text on a narrow panel and truncated every number to "74…". */
+  col.c-proj  { width: auto; }
+  col.c-sess  { width: 84px; }
+  col.c-prpts { width: 52px; }   /* the "PRPTS" header is wider than its values */
+  col.c-in    { width: 62px; }
+  col.c-out   { width: 62px; }
+  col.c-cr    { width: 64px; }
+  col.c-cw    { width: 64px; }
+  col.c-tools { width: 15%; }
+  col.c-mdl   { width: 68px; }
+  col.c-last  { width: 68px; }   /* fits the longest relative time ("10h ago") + cell padding */
+  /* Fixed px, not %: the Observe link is ~69px wide and never shrinks, so a
+     percentage column clipped it ("Observe →" → "Observe") on wide screens
+     where 7% of the panel still landed under the link's real width. */
+  col.c-obs   { width: 86px; }
 
   .obs-link {
     display: inline-block; padding: 1px 7px;
@@ -215,6 +239,7 @@
   .detail-title {
     font-size: 13px; font-weight: 700; color: var(--text);
     margin-bottom: 6px;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .detail-meta {
     display: flex; flex-wrap: wrap; gap: 10px;
@@ -230,8 +255,12 @@
     margin-top: 4px;
     color: var(--dim);
   }
+  /* One line + ellipsis. min-width:0 so the flex row can actually shrink it
+     instead of overflowing the card on narrow panels. */
   .session-id-text {
-    font-size: 11px; color: #4b5563; word-break: break-all;
+    font-size: 11px; color: #4b5563;
+    flex: 1 1 auto; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .copy-btn {
     display: inline-flex; align-items: center;
@@ -364,6 +393,21 @@
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     max-width: 260px;
   }
+  .tree-more {
+    flex: none;
+    font: inherit; font-size: 10px; line-height: 1;
+    color: var(--accent); background: none;
+    border: 1px solid var(--border); border-radius: 4px;
+    padding: 2px 5px; cursor: pointer;
+  }
+  .tree-more:hover { background: var(--bg3); }
+  .tree-label-full {
+    margin: 2px 4px 6px 18px; padding: 6px 8px;
+    background: var(--bg3); border: 1px solid var(--border); border-radius: 4px;
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    white-space: pre-wrap; overflow-wrap: anywhere;
+    max-height: 260px; overflow-y: auto;
+  }
   .tree-ts { font-family: var(--mono); font-size: 10px; color: var(--dim); }
   .tree-tokens { font-family: var(--mono); font-size: 10px; color: #6b7280; }
   .tree-dur { font-family: var(--mono); font-size: 10px; color: #9ca3af; }
@@ -383,39 +427,70 @@
     padding: 20px 0;
   }
 
+  /* ── Rich tooltip (see mkTip in app.js) ──
+     Replaces the native title= popup for truncated session/project names so the
+     full value is readable in the dashboard's own style. Positioned with
+     position:fixed from JS, so it never gets clipped by a panel's overflow. */
+  #tip {
+    position: fixed; top: 0; left: 0; z-index: 100;
+    max-width: min(420px, calc(100vw - 20px));
+    padding: 6px 9px;
+    background: #111827; color: #f9fafb;
+    border-radius: 5px;
+    font-family: var(--mono); font-size: 11px; line-height: 1.45;
+    box-shadow: 0 4px 14px rgba(0,0,0,.28);
+    overflow-wrap: anywhere;         /* long paths / ids wrap inside the tooltip */
+    pointer-events: none;            /* never steals the hover from the row */
+    opacity: 0; visibility: hidden;
+    transition: opacity .12s ease;
+  }
+  #tip.on { opacity: 1; visibility: visible; }
+  #tip .tip-label {
+    display: block; margin-bottom: 2px;
+    font-family: var(--sans); font-size: 9px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .06em; color: #9ca3af;
+  }
+  /* Coarse pointers (touch) have no hover — don't reserve space for a tooltip
+     that can never show. */
+  @media (hover: none) { #tip { display: none; } }
+
   /* ── Narrow layout ── */
   @media (max-width: 820px) {
-    #main { grid-template-columns: 1fr !important; grid-template-rows: auto 1fr; height: auto; overflow: visible; }
+    #main { grid-template-columns: 1fr !important; grid-template-rows: auto auto 1fr; height: auto; overflow: visible; }
     #left-panel { border-right: none; border-bottom: 1px solid var(--border); max-height: 50vh; }
+    #splitter { display: none; }   /* stacked layout: nothing to drag */
     .loading-grid { grid-template-columns: 1fr; }
   }
 
   /* ── Responsive sessions table ──
      As the left panel narrows, drop the least-glanceable columns so the ones
      that matter — Project, Prpts, Last and the Observe link — always stay
-     readable (the Observe link was clipping to "Ob" before). Each hidden column
-     also gets its <col> width zeroed so table-layout:fixed redistributes the
-     freed width to the remaining columns instead of leaving a gap. */
-  #sessions-table td:nth-child(11) { overflow: visible; }   /* never clip Observe → */
+     readable (the Observe link was clipping to "Ob" before).
 
-  /* ≤680px: hide Session id + cache read/write */
-  @container (max-width: 680px) {
-    #sessions-table col.c-sess, #sessions-table col.c-cr, #sessions-table col.c-cw { width: 0; }
-    #sessions-table thead th:nth-child(2), #sessions-table tbody td:nth-child(2),
-    #sessions-table thead th:nth-child(6), #sessions-table tbody td:nth-child(6),
-    #sessions-table thead th:nth-child(7), #sessions-table tbody td:nth-child(7) { display: none; }
+     Columns are dropped with `visibility: collapse` on the <col>, NOT with
+     `display: none` on the cells: display:none removes the cell from the row,
+     and table-layout:fixed then re-maps the *remaining* cells onto the *first*
+     <col> elements in document order. That shifted every width one slot to the
+     left and left the Observe cell 0px wide — the actual cause of the clipped
+     "Observe →". Collapsing keeps each cell on its own column. */
+
+  /* ≤760px: hide Session id + cache read/write */
+  @container (max-width: 760px) {
+    #sessions-table col.c-sess, #sessions-table col.c-cr, #sessions-table col.c-cw {
+      visibility: collapse; width: 0;
+    }
   }
-  /* ≤520px: also hide Top Tools + Model */
-  @container (max-width: 520px) {
-    #sessions-table col.c-tools, #sessions-table col.c-mdl { width: 0; }
-    #sessions-table thead th:nth-child(8), #sessions-table tbody td:nth-child(8),
-    #sessions-table thead th:nth-child(9), #sessions-table tbody td:nth-child(9) { display: none; }
+  /* ≤620px: also hide Top Tools + Model */
+  @container (max-width: 620px) {
+    #sessions-table col.c-tools, #sessions-table col.c-mdl {
+      visibility: collapse; width: 0;
+    }
   }
-  /* ≤400px: also hide In + Out — leaves Project, Prpts, Last, Observe */
-  @container (max-width: 400px) {
-    #sessions-table col.c-in, #sessions-table col.c-out { width: 0; }
-    #sessions-table thead th:nth-child(4), #sessions-table tbody td:nth-child(4),
-    #sessions-table thead th:nth-child(5), #sessions-table tbody td:nth-child(5) { display: none; }
+  /* ≤430px: also hide In + Out — leaves Project, Prpts, Last, Observe */
+  @container (max-width: 430px) {
+    #sessions-table col.c-in, #sessions-table col.c-out {
+      visibility: collapse; width: 0;
+    }
   }
 </style>
 </head>
@@ -463,6 +538,9 @@
     </div>
   </div>
 
+  <div id="splitter" role="separator" aria-orientation="vertical"
+       aria-label="Resize panels" tabindex="0"></div>
+
   <!-- Live feed (right panel, hidden when detail is open) -->
   <div class="panel" id="right-panel">
     <div class="panel-header">Live Feed</div>
@@ -485,6 +563,8 @@
     </div>
   </div>
 </div>
+
+<div id="tip" role="tooltip" aria-hidden="true"></div>
 
 <script type="module" src="/app.js"></script>
 </body>

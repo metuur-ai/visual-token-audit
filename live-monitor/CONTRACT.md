@@ -105,6 +105,9 @@ TreeNode = {
   "name": "Bash",            // tool/skill/command/agent name; for prompt/assistant: "" or model
   "ts": "…",
   "label": "≤100 char snippet",   // prompt text, tool input summary, etc.
+  "labelFull": "≤1000 chars",// optional; ROOT prompt/command nodes only, and only
+                             // when the prompt exceeds 100 chars. Powers the
+                             // "⋯ more" expander in the invocation tree.
   "usage": { … },            // optional; attributed tokens for this node's own step
   "durationMs": 1234,        // optional; tool_use → matching tool_result delta
   "resultBytes": 5678,       // optional; size of tool_result content (context cost signal)

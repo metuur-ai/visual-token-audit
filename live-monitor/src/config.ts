@@ -25,6 +25,7 @@ export const TEXT_SNIPPET_LEN = 140;
 export const SESSION_LINE_MAX = 4000; // last N parsed lines per session
 export const SESSION_ACTIVE_MS = 7 * 24 * 60 * 60 * 1000; // only retain sessions active in last 7d
 export const LABEL_LEN = 100; // tree node label cap
+export const FULL_LABEL_LEN = 1000; // root prompt "show full prompt" cap
 export const EVIDENCE_LEN = 80; // auto-loading evidence cap (contract: ≤120, we keep ≤80)
 export const TREE_MAX_NODES = 2000; // whole-tree node cap
 export const AGENT_MAX_DEPTH = 4; // sidechain nesting depth cap

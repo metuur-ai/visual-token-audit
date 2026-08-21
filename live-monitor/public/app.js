@@ -35,6 +35,67 @@ const backBtn    = document.getElementById('back-btn');
 const detailLoading = document.getElementById('detail-loading');
 const detailContent = document.getElementById('detail-content');
 
+// ── Rich tooltip ──────────────────────────────────────────────────────────────
+// Truncated session/project names need the full value on hover. The native
+// title= popup is slow, unstyled and can't wrap long paths, so #tip (see
+// index.html) replaces it. It is position:fixed, so a panel's overflow:hidden
+// never clips it.
+const tipEl = document.getElementById('tip');
+
+/** Mark `node` as hoverable: shows `value` (with optional uppercase `label`). */
+function withTip(node, value, label) {
+  const v = value == null ? '' : String(value);
+  if (v) {
+    node.dataset.tip = v;
+    if (label) node.dataset.tipLabel = label;
+  }
+  return node;
+}
+
+function hideTip() {
+  if (!tipEl) return;
+  tipEl.classList.remove('on');
+  tipEl.setAttribute('aria-hidden', 'true');
+}
+
+function showTip(target) {
+  if (!tipEl) return;
+  tipEl.innerHTML = '';
+  if (target.dataset.tipLabel) {
+    const label = document.createElement('span');
+    label.className = 'tip-label';
+    label.textContent = target.dataset.tipLabel;
+    tipEl.appendChild(label);
+  }
+  tipEl.appendChild(document.createTextNode(target.dataset.tip));
+  tipEl.classList.add('on');
+  tipEl.setAttribute('aria-hidden', 'false');
+
+  // Measure after the content is in, then clamp inside the viewport: below the
+  // element by default, above it when there isn't room.
+  const a = target.getBoundingClientRect();
+  const t = tipEl.getBoundingClientRect();
+  const GAP = 6, PAD = 8;
+  let left = a.left;
+  let top  = a.bottom + GAP;
+  if (left + t.width > window.innerWidth - PAD) left = window.innerWidth - t.width - PAD;
+  if (left < PAD) left = PAD;
+  if (top + t.height > window.innerHeight - PAD) top = Math.max(PAD, a.top - t.height - GAP);
+  tipEl.style.transform = `translate(${Math.round(left)}px, ${Math.round(top)}px)`;
+}
+
+if (tipEl) {
+  document.addEventListener('mouseover', (e) => {
+    const target = e.target.closest?.('[data-tip]');
+    if (target) showTip(target);
+    else hideTip();
+  });
+  // A re-render or a scroll leaves the tooltip pointing at nothing.
+  document.addEventListener('scroll', hideTip, true);
+  window.addEventListener('resize', hideTip);
+  document.addEventListener('click', hideTip, true);
+}
+
 // ── Formatting helpers ────────────────────────────────────────────────────────
 function fmt(n) {
   if (n === undefined || n === null) return '—';
@@ -164,9 +225,8 @@ function renderSessions() {
     const cells = [
       () => {
         const td = document.createElement('td');
-        td.title = safe(s.project);
         td.textContent = safe(s.project);
-        return td;
+        return withTip(td, s.project, 'Project');
       },
       () => {
         const td = document.createElement('td');
@@ -176,7 +236,7 @@ function renderSessions() {
           td.appendChild(dot);
         }
         td.appendChild(document.createTextNode(shortId(s.sessionId)));
-        return td;
+        return withTip(td, s.sessionId, 'Session id');
       },
       () => { const td = document.createElement('td'); td.textContent = safe(s.prompts ?? 0); return td; },
       () => { const td = document.createElement('td'); td.textContent = fmt(s.usage?.input);      return td; },
@@ -191,6 +251,8 @@ function renderSessions() {
           chip.textContent = safe(t);
           td.appendChild(chip);
         }
+        // The column ellipsizes once there are 2+ chips, so expose the full list on hover.
+        if (tools3.length) withTip(td, tools3.map(safe).join(', '), 'Top tools');
         return td;
       },
       () => {
@@ -202,6 +264,8 @@ function renderSessions() {
           chip.title = safe(m);
           td.appendChild(chip);
         }
+        // Multi-model cells ellipsize; the per-chip title alone can't be reached then.
+        if (models3.length) withTip(td, models3.map(safe).join(', '), 'Models');
         return td;
       },
       () => {
@@ -440,6 +504,7 @@ function openDetail(sessionId) {
   // Update header title
   const s = sessions.get(sessionId);
   detailPanelTitle.textContent = safe(s?.project ?? sessionId);
+  withTip(detailPanelTitle, s?.project ?? sessionId, 'Project');
 
   // Highlight row
   for (const tr of sessBody.querySelectorAll('tr[data-sid]')) {
@@ -456,6 +521,7 @@ function closeDetail() {
   detailPanel.classList.add('hidden');
   mainEl.classList.remove('detail-open');
   detailPanelTitle.textContent = '';
+  delete detailPanelTitle.dataset.tip;
 
   for (const tr of sessBody.querySelectorAll('tr[data-sid]')) {
     tr.classList.remove('selected');
@@ -710,6 +776,31 @@ function buildTreeNodes(nodes, isRoot, depth) {
       if (node.label) {
         container.appendChild(el('span', 'tree-label', node.label.slice(0, 100)));
       }
+      // full prompt toggle (root prompts only — server sends labelFull)
+      if (node.labelFull) {
+        const btn = el('button', 'tree-more', '⋯ more');
+        btn.type = 'button';
+        btn.title = 'Show the full prompt (first 1000 characters)';
+        container.appendChild(btn);
+      }
+    }
+
+    /**
+     * Wire the "⋯ more" button in `row` to show/hide `fullEl`.
+     * The button lives inside a <summary>, so the click must not reach the
+     * <details> toggle.
+     */
+    function wireFullToggle(row, fullEl, details) {
+      const btn = row.querySelector('.tree-more');
+      if (!btn) return;
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const show = fullEl.hidden;
+        fullEl.hidden = !show;
+        btn.textContent = show ? '⋯ less' : '⋯ more';
+        if (show && details) details.open = true; // the text lives inside <details>
+      });
     }
 
     if (hasChildren) {
@@ -727,6 +818,13 @@ function buildTreeNodes(nodes, isRoot, depth) {
       buildNodeContent(summary);
       details.appendChild(summary);
 
+      if (node.labelFull) {
+        const fullEl = el('div', 'tree-label-full', node.labelFull);
+        fullEl.hidden = true;
+        details.appendChild(fullEl);
+        wireFullToggle(summary, fullEl, details);
+      }
+
       const childList = buildTreeNodes(node.children, false, depth + 1);
       if (childList) details.appendChild(childList);
 
@@ -735,6 +833,12 @@ function buildTreeNodes(nodes, isRoot, depth) {
       const leaf = el('div', 'tree-leaf');
       buildNodeContent(leaf);
       li.appendChild(leaf);
+      if (node.labelFull) {
+        const fullEl = el('div', 'tree-label-full', node.labelFull);
+        fullEl.hidden = true;
+        li.appendChild(fullEl);
+        wireFullToggle(leaf, fullEl, null);
+      }
     }
 
     ul.appendChild(li);
@@ -754,11 +858,12 @@ function renderDetail(detail) {
   const headerCard = el('div', 'detail-card');
 
   const titleRow = el('div', 'detail-title', detail.project ?? detail.sessionId);
+  withTip(titleRow, detail.project ?? detail.sessionId, 'Project');
   headerCard.appendChild(titleRow);
 
   // Full session id + copy button
   const idRow = el('div', 'session-id-row');
-  const idText = el('span', 'session-id-text', detail.sessionId);
+  const idText = withTip(el('span', 'session-id-text', detail.sessionId), detail.sessionId, 'Session id');
   const copyBtn = el('button', 'copy-btn', 'copy');
   copyBtn.type = 'button';
   copyBtn.addEventListener('click', (e) => {
@@ -779,8 +884,7 @@ function renderDetail(detail) {
   // v2.2: session working directory
   if (detail.cwd) {
     const cwdRow = el('div', 'session-id-row');
-    cwdRow.appendChild(el('span', 'session-id-text', detail.cwd));
-    cwdRow.title = detail.cwd;
+    cwdRow.appendChild(withTip(el('span', 'session-id-text', detail.cwd), detail.cwd, 'Working directory'));
     headerCard.appendChild(cwdRow);
   }
 
@@ -1024,6 +1128,57 @@ setInterval(() => {
     }
   }
 }, 10_000);
+
+// ── Splitter drag ─────────────────────────────────────────────────────────────
+// Two independent widths are remembered: one for the plain layout and one for
+// the narrower left column used while a detail panel is open.
+{
+  const splitter = document.getElementById('splitter');
+  const MIN_PX = 320, MIN_RIGHT_PX = 280;
+
+  const varName = () => mainEl.classList.contains('detail-open') ? '--split-detail' : '--split';
+
+  const apply = (px) => {
+    const total = mainEl.clientWidth;
+    const clamped = Math.min(Math.max(px, MIN_PX), total - MIN_RIGHT_PX);
+    if (clamped < MIN_PX) return;               // window too narrow to split
+    const pct = (clamped / total) * 100;
+    mainEl.style.setProperty(varName(), pct.toFixed(2) + '%');
+    try { localStorage.setItem('vta' + varName(), pct.toFixed(2)); } catch {}
+  };
+
+  for (const key of ['--split', '--split-detail']) {
+    let saved = null;
+    try { saved = localStorage.getItem('vta' + key); } catch {}
+    if (saved) mainEl.style.setProperty(key, saved + '%');
+  }
+
+  splitter.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    splitter.setPointerCapture(e.pointerId);
+    splitter.classList.add('dragging');
+    document.body.classList.add('resizing');
+
+    const onMove = (ev) => apply(ev.clientX - mainEl.getBoundingClientRect().left);
+    const onUp = () => {
+      splitter.removeEventListener('pointermove', onMove);
+      splitter.classList.remove('dragging');
+      document.body.classList.remove('resizing');
+    };
+    splitter.addEventListener('pointermove', onMove);
+    splitter.addEventListener('pointerup', onUp, { once: true });
+    splitter.addEventListener('pointercancel', onUp, { once: true });
+  });
+
+  // Keyboard: arrows nudge, Home resets
+  splitter.addEventListener('keydown', (e) => {
+    const step = e.shiftKey ? 48 : 16;
+    const cur = document.getElementById('left-panel').getBoundingClientRect().width;
+    if (e.key === 'ArrowLeft') { apply(cur - step); e.preventDefault(); }
+    else if (e.key === 'ArrowRight') { apply(cur + step); e.preventDefault(); }
+    else if (e.key === 'Home') { mainEl.style.removeProperty(varName()); e.preventDefault(); }
+  });
+}
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 setConnStatus('');

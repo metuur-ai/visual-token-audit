@@ -8,7 +8,7 @@
 
 
 
-import { LABEL_LEN, TREE_MAX_NODES } from "./config.ts";
+import { FULL_LABEL_LEN, LABEL_LEN, TREE_MAX_NODES } from "./config.ts";
 import { costUSD, priceFor } from "./cost.ts";
 import { sessionLines, sessions, subagentMeta } from "./state.ts";
 import { contextWindowForModel } from "./startup-inventory.ts";
@@ -171,11 +171,14 @@ export function buildSessionDetail(sessionId: string): string | null {
     if (ln.sidechain) continue; // sidechain lines summarized under agent nodes, not top-level
     if (ln.kind === "prompt") {
       const isCmd = !!ln.command;
+      // Root prompts carry a longer copy so the UI can expand the full prompt.
+      const full = clip(ln.text ?? "", FULL_LABEL_LEN);
       cur = {
         kind: isCmd ? "command" : "prompt",
         name: isCmd ? ln.command! : "",
         ts: ln.ts,
-        label: clip(ln.text ?? "", LABEL_LEN),
+        label: full.slice(0, LABEL_LEN),
+        ...(full.length > LABEL_LEN ? { labelFull: full } : {}),
         children: [],
       };
       roots.push(cur);
