@@ -50,6 +50,9 @@ export interface TreeNode {
   name: string;
   ts: string;
   label: string;
+  /** Root prompt/command nodes only: longer prompt text (≤FULL_LABEL_LEN),
+   *  present only when the prompt is longer than `label`. */
+  labelFull?: string;
   usage?: Usage;
   durationMs?: number;
   resultBytes?: number;
