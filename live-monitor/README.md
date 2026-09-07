@@ -4,6 +4,8 @@ A zero-dependency [Bun](https://bun.sh) server that tails your Claude Code and C
 session transcripts in real time and exposes them over HTTP + Server-Sent Events
 for the dashboard UI.
 
+See the [changelog](CHANGELOG.md) for release notes, including version 0.3.0.
+
 ## Install Globally
 
 ```sh
@@ -64,9 +66,12 @@ The equivalent direct commands are `node bin/cli.js start`, `node bin/cli.js sta
 and `node bin/cli.js stop`. `npm start` continues to run in the foreground with Bun.
 Use the checkout commands for local changes that have not been published yet.
 
-`start` detaches the service so it continues after the terminal closes. Repeating
+`start` detaches the service so it continues after the terminal closes, then opens
+the local dashboard in your default browser. Running `start` again opens the
+existing instance. Set `MONITOR_OPEN_BROWSER=0` to skip opening a browser. Repeating
 `start` or `stop` is safe. Without a command, the monitor runs in the foreground.
-`status` exits with code 0 when running and 1 when stopped. This does not install
+`status` prints the local URL and log file path, whether running or stopped, and
+exits with code 0 when running and 1 when stopped. This does not install
 a login or reboot service; run `start` again after restarting your computer.
 
 Logs and private control state live in `~/.claude-live-monitor/`, one instance per
@@ -109,6 +114,7 @@ buffer + session stores), `watch` (file tailing), the `tree` / `session-detail` 
 
 | Var | Default | Meaning |
 |---|---|---|
+| `MONITOR_OPEN_BROWSER` | `1` | Set to `0` to prevent `start` from opening the default browser. |
 | `MONITOR_PORT` | `8722` | Port to listen on (host is always `127.0.0.1`). |
 | `MONITOR_STATE_DIR` | `~/.claude-live-monitor` | Background service logs and private control state; use the same directory for start, status, and stop. |
 | `CODEX_HOME` | `~/.codex` | Codex data directory; reads `sessions/` and `archived_sessions/`. |

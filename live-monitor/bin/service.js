@@ -6,6 +6,25 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { setTimeout as delay } from "node:timers/promises";
 
+async function openBrowser(url) {
+  if (process.env.MONITOR_OPEN_BROWSER === "0") return;
+  const [command, args] = process.platform === "darwin" ? ["open", [url]]
+    : process.platform === "win32" ? ["rundll32.exe", ["url.dll,FileProtocolHandler", url]]
+    : ["xdg-open", [url]];
+  await new Promise(resolve => {
+    const opener = spawn(command, args, { stdio: "ignore", timeout: 5000 });
+    let finished = false;
+    const finish = success => {
+      if (finished) return;
+      finished = true;
+      if (!success) console.warn(`Could not open the default browser. Open ${url} manually.`);
+      resolve();
+    };
+    opener.once("error", () => finish(false));
+    opener.once("exit", code => finish(code === 0));
+  });
+}
+
 export async function serviceCommand(command) {
   const port = Number(process.env.MONITOR_PORT ?? 8722);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("MONITOR_PORT must be between 1 and 65535.");
@@ -32,7 +51,7 @@ export async function serviceCommand(command) {
   }
   const running = await control(state?.token);
   if (command === "status") {
-    console.log(running ? `Running at ${url} (PID ${state.pid}).\nLog: ${logPath}` : `Background service is stopped on port ${port}.`);
+    console.log(`${running ? `Running (PID ${state.pid}).` : "Background service is stopped."}\nURL: ${url}\nLog: ${logPath}`);
     process.exitCode = running ? 0 : 1;
     return;
   }
@@ -49,7 +68,11 @@ export async function serviceCommand(command) {
     }
     throw new Error("Service has not stopped yet; check status and the log.");
   }
-  if (running) { console.log(`Already running at ${url} (PID ${state.pid}).`); return; }
+  if (running) {
+    console.log(`Already running at ${url} (PID ${state.pid}).`);
+    await openBrowser(url);
+    return;
+  }
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const token = randomBytes(32).toString("hex");
   const log = openSync(logPath, "a", 0o600);
@@ -73,6 +96,7 @@ export async function serviceCommand(command) {
       } catch (error) { child.kill(); throw error; }
       child.unref();
       console.log(`Started background service at ${url} (PID ${child.pid}).\nLog: ${logPath}`);
+      await openBrowser(url);
       return;
     }
     await delay(100);
