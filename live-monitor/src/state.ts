@@ -35,6 +35,9 @@ export function updateAgg(ev: MonitorEvent) {
   if (!a) {
     a = {
       sessionId: ev.sessionId,
+      provider: ev.provider ?? "claude",
+      parentSessionId: ev.parentSessionId,
+      agentName: ev.agentName,
       project: ev.project,
       firstTs: ev.ts,
       lastTs: ev.ts,
@@ -50,6 +53,8 @@ export function updateAgg(ev: MonitorEvent) {
     };
     sessions.set(ev.sessionId, a);
   }
+  if (ev.parentSessionId) a.parentSessionId = ev.parentSessionId;
+  if (ev.agentName) a.agentName = ev.agentName;
   a.project = ev.project || a.project;
   if (ev.cwd) a.cwd = ev.cwd; // last-seen working directory wins
   if (ev.ts < a.firstTs) a.firstTs = ev.ts;
@@ -62,6 +67,7 @@ export function updateAgg(ev: MonitorEvent) {
     a.usage.output += ev.usage.output;
     a.usage.cacheRead += ev.usage.cacheRead;
     a.usage.cacheWrite += ev.usage.cacheWrite;
+    if (ev.usage.reasoning !== undefined) a.usage.reasoning = (a.usage.reasoning ?? 0) + ev.usage.reasoning;
   }
   if (ev.tools) for (const t of ev.tools) a.tools[t] = (a.tools[t] ?? 0) + 1;
   if (ev.skill) a.skills[ev.skill] = (a.skills[ev.skill] ?? 0) + 1;
@@ -102,6 +108,7 @@ export function emit(partial: Omit<MonitorEvent, "id">, broadcast: boolean, line
   ring.push(ev);
   if (ring.length > RING_MAX) ring.shift();
   updateAgg(ev);
+  if (ev.provider === "codex") observeCache.clear();
   if (line) storeSessionLine(ev.sessionId, line);
   if (broadcast) {
     for (const send of clients) {

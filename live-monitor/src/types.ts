@@ -1,6 +1,8 @@
 // ----------------------------------------------------------------------------
 // Types
 // ----------------------------------------------------------------------------
+export type Provider = "claude" | "codex";
+
 export type Kind = "prompt" | "assistant" | "tool_use" | "tool_result" | "system";
 
 export interface Usage {
@@ -8,18 +10,24 @@ export interface Usage {
   output: number;
   cacheRead: number;
   cacheWrite: number;
+  reasoning?: number; // subset of output, never added to total tokens
 }
 
 export interface MonitorEvent {
   id: number;
   ts: string;
   sessionId: string;
+  provider?: Provider;
+  parentSessionId?: string;
+  agentName?: string;
   project: string;
   kind: Kind;
   uuid?: string; // v2: transcript line uuid
   parentUuid?: string; // v2: transcript line parentUuid
   model?: string;
   usage?: Usage;
+  contextTokens?: number; // last request input, distinct from cumulative deltas
+  contextWindow?: number;
   tools?: string[];
   skill?: string;
   command?: string; // v2: slash command detected in a prompt
@@ -32,6 +40,9 @@ export interface MonitorEvent {
 
 export interface SessionAgg {
   sessionId: string;
+  provider?: Provider;
+  parentSessionId?: string;
+  agentName?: string;
   project: string;
   cwd?: string; // v2.2: last-seen working directory of the session
   firstTs: string;
@@ -55,12 +66,20 @@ export interface ToolUseBlock {
   input: any;
 }
 export interface SessionLine {
+  codexResources?: import("./codex-evidence.ts").CodexResource[];
+  nestedToolRequests?: string[];
+  detailText?: string;
+  provider?: Provider;
+  parentSessionId?: string;
+  agentName?: string;
   ts: string;
   uuid?: string;
   parentUuid?: string;
   kind: Kind;
   model?: string;
   usage?: Usage;
+  contextTokens?: number; // last request input, distinct from cumulative deltas
+  contextWindow?: number;
   sidechain: boolean;
   agentId?: string; // v3.1: sub-agent id (from line field or subagents/agent-<id>.jsonl path)
   isMeta: boolean;

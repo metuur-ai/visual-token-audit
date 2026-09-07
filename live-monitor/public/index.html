@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Claude Session Monitor</title>
+<title>Claude &amp; Codex Session Monitor</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -516,7 +516,11 @@
 
 <div id="main">
   <div class="panel" id="left-panel">
-    <div class="panel-header">Sessions</div>
+    <div class="panel-header">Sessions
+      <select id="provider-filter" aria-label="Filter by provider" style="margin-left:12px;background:transparent;color:inherit;border:1px solid #aaa;border-radius:4px;padding:3px">
+        <option value="all">All providers</option><option value="claude">Claude Code</option><option value="codex">Codex</option>
+      </select>
+    </div>
     <div class="panel-scroll" id="sessions-scroll">
       <table id="sessions-table">
         <colgroup>

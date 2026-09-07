@@ -59,6 +59,11 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
   ): ParseResult => ({
     ev: {
       ...ev,
+      parentSessionId: o.parentSessionId,
+      agentName: o.agentName,
+      provider: o.provider === "codex" ? "codex" : "claude",
+      ...(o.contextTokens !== undefined ? { contextTokens: o.contextTokens } : {}),
+      ...(o.contextWindow ? { contextWindow: o.contextWindow } : {}),
       ...(uuid ? { uuid } : {}),
       ...(parentUuid ? { parentUuid } : {}),
       ...(sidechain ? { sidechain: true } : {}),
@@ -66,6 +71,9 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
     },
     line: {
       ts,
+      provider: o.provider === "codex" ? "codex" : "claude",
+      contextTokens: o.contextTokens,
+      contextWindow: o.contextWindow,
       uuid,
       parentUuid,
       kind: ev.kind,
@@ -75,6 +83,9 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
       ...(agentId ? { agentId } : {}),
       isMeta: o.isMeta === true,
       text: ev.text,
+      detailText: o.detailText,
+      codexResources: o.codexResources,
+      nestedToolRequests: o.nestedToolRequests,
       reminders: [],
       toolUses: [],
       ...extra,
@@ -181,7 +192,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
         const skillLoads = detectSkillLoads(resultStr);
         return mk(
           { ts, sessionId, project, kind: "tool_result", ...(text ? { text } : {}) },
-          { toolResultFor, resultBytes, ...(skillLoads.length ? { skillLoads } : {}) },
+          { toolResultFor, resultBytes, ...(o.provider === "codex" ? { detailText: resultStr.slice(0, 6000) } : {}), ...(skillLoads.length ? { skillLoads } : {}) },
         );
       }
       // array of only text blocks → treat as prompt

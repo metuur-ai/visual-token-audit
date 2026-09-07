@@ -1,3 +1,4 @@
+import { transcriptLines } from "./transcripts.ts";
 // ----------------------------------------------------------------------------
 // Projects index over a `days` window — self-contained on-disk scan.
 // The in-memory `sessions` map only covers SEED_MTIME_WINDOW_MS (~48h), so a
@@ -23,6 +24,7 @@ export const projectsCache = new Map<number, { at: number; sig: string; json: st
 
 export interface ProjSessAgg {
   sessionId: string;
+  provider?: "claude" | "codex";
   slug: string;
   cwd: string;
   firstTs: string;
@@ -92,10 +94,7 @@ export function buildProjectsJSON(days: number): string {
       continue;
     }
 
-    for (let s = 0, e = 0; s < raw.length; s = e + 1) {
-      e = raw.indexOf("\n", s);
-      if (e === -1) e = raw.length;
-      const line = raw.slice(s, e);
+    for (const line of transcriptLines(f.path, raw)) {
       if (!line) continue;
       const isAsst = line.includes('"type":"assistant"');
       const isUser = !isAsst && line.includes('"type":"user"');
@@ -116,6 +115,7 @@ export function buildProjectsJSON(days: number): string {
       const sid = sub?.parentSessionId ?? (typeof o.sessionId === "string" ? o.sessionId : fallbackSid);
       const msg = o.message;
       const agg = get(sid, slug);
+      agg.provider = o.provider === "codex" ? "codex" : "claude";
 
       if (typeof o.cwd === "string" && o.cwd.length > 0) agg.cwd = o.cwd;
       if (agg.firstTs === "" || ts < agg.firstTs) agg.firstTs = ts;
@@ -173,6 +173,7 @@ export function buildProjectsJSON(days: number): string {
     if (a.firstTs === "" && a.lastTs === "") continue; // never contributed
     foldSessions.push({
       sessionId: a.sessionId,
+      provider: a.provider,
       project: projectName(a.cwd, a.slug),
       cwd: a.cwd || undefined,
       firstTs: a.firstTs || a.lastTs,

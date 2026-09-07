@@ -18,7 +18,7 @@ const fmt = n => {
   return '' + Math.round(n);
 };
 const int = n => (n || 0).toLocaleString('en-US');
-const money = n => '$' + (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const money = n => n == null ? 'Unavailable' : '$' + (n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const rel = iso => {
   const d = Date.now() - Date.parse(iso);
   if (isNaN(d)) return '—';
@@ -184,10 +184,11 @@ function App() {
     ${stale ? html`<div class="banner">refresh failed (${err}) — showing last good data</div>` : null}
     <div class="hero fade" style="animation-delay:0ms">
       <div class="hs"><div class="l">Total tokens</div><div class="n">${fmt(t.tokens)}</div><div class="d">${int(t.tokens)} across ${data.days || 14} days</div></div>
-      <div class="hs"><div class="l">Cost</div><div class="n cost">${money(t.cost)}</div><div class="d">estimated from model pricing</div></div>
+      <div class="hs"><div class="l">Cost</div><div class="n cost">${money(t.cost)}</div><div class="d">${t.unpricedTokens ? "Codex pricing unavailable · Claude estimate " + money(t.knownCost) : "estimated from model pricing"}</div></div>
       <div class="hs"><div class="l">Sessions</div><div class="n">${int(t.sessions)}</div><div class="d">${int(t.prompts)} prompts · ${int(t.projects)} projects</div></div>
       <div class="hs"><div class="l">Agent runs</div><div class="n">${int(t.agentRuns)}</div><div class="d">${int(t.skillInvocations)} skill · ${int(t.commandRuns)} command · ${int(t.ruleLoads)} rule loads</div></div>
     </div>
+    ${data.providers ? html`<div class="hero fade">${Object.entries(data.providers).map(([name, usage]) => html`<div class="hs"><div class="l">${name === 'codex' ? 'Codex' : 'Claude Code'}</div><div class="n">${fmt(usage.tokens)}</div><div class="d">tokens · ${int(usage.prompts)} prompts</div></div>`)}</div>` : null}
     <section class="panel fade" style="animation-delay:60ms">
       <div class="ph"><span class="pt">Daily tokens</span><span class="psub">${data.days || days}-day activity</span></div>
       <${AreaChart} byDay=${data.byDay} />

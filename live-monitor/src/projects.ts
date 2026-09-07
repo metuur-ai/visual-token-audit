@@ -23,6 +23,7 @@ export interface ProjectUsage {
 }
 export interface FoldSession {
   sessionId: string;
+  provider?: "claude" | "codex";
   project: string;
   cwd?: string;
   firstTs: string;
@@ -35,6 +36,7 @@ export interface FoldSession {
 
 export interface ProjectSessionRecord {
   sessionId: string;
+  provider?: "claude" | "codex";
   lastTs: string;
   prompts: number;
   usage: ProjectUsage;
@@ -131,6 +133,7 @@ export function foldProjects(sessionsIter: Iterable<FoldSession>, startedAt: str
     const sessions: ProjectSessionRecord[] = members
       .map((m) => ({
         sessionId: m.sessionId,
+        ...(m.provider ? { provider: m.provider } : {}),
         lastTs: m.lastTs,
         prompts: m.prompts || 0,
         usage: {

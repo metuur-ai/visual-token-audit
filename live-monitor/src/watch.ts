@@ -4,11 +4,14 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync, watch } from "fs";
 import { basename, join } from "path";
-import { PROJECTS_DIR, SEED_MTIME_WINDOW_MS } from "./config.ts";
+import { CODEX_SESSION_DIRS, PROJECTS_DIR, SEED_MTIME_WINDOW_MS } from "./config.ts";
+import { isCodexFile, transcriptAdapter } from "./transcripts.ts";
 import { parseLine } from "./parse.ts";
 import { detailCache, emit, fileState, observeCache, ring, sessions, subagentMeta } from "./state.ts";
 import { SubagentPath } from "./types.ts";
 import { log } from "./util.ts";
+
+const adapters = new Map<string, (raw: string) => string | null>();
 
 export function slugOf(path: string): string {
   // .../.claude/projects/<slug>/<file>.jsonl → <slug>
@@ -57,6 +60,20 @@ export function readAppended(path: string, broadcast: boolean) {
   }
   const size = st.size;
   let state = fileState.get(path);
+  // Archiving moves a rollout; carry its offset and counters to the new path.
+  if (!state && isCodexFile(path)) {
+    for (const [oldPath, oldState] of fileState) {
+      if (isCodexFile(oldPath) && basename(oldPath) === basename(path)) {
+        state = oldState;
+        fileState.set(path, state);
+        const adapter = adapters.get(oldPath);
+        if (adapter) adapters.set(path, adapter);
+        fileState.delete(oldPath);
+        adapters.delete(oldPath);
+        break;
+      }
+    }
+  }
   if (!state) {
     state = { offset: 0, partial: "" };
     fileState.set(path, state);
@@ -70,6 +87,17 @@ export function readAppended(path: string, broadcast: boolean) {
   }
   if (state.offset === size) return;
 
+  let adapt = adapters.get(path);
+  if (!adapt) {
+    adapt = transcriptAdapter(path);
+    // An old rollout registered at EOF can resume later. Recover metadata and
+    // cumulative baseline without emitting historical usage a second time.
+    if (isCodexFile(path) && state.offset > 0) {
+      const previous = readFileSync(path).subarray(0, state.offset).toString("utf8");
+      for (const line of previous.split("\n")) if (line) adapt(line);
+    }
+    adapters.set(path, adapt);
+  }
   const slug = slugOf(path);
   const sub = subagentPathOf(path);
   if (sub) loadSubagentMeta(path, sub);
@@ -91,7 +119,8 @@ export function readAppended(path: string, broadcast: boolean) {
         const line = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
         if (line.trim()) {
-          const r = parseLine(line, slug, sub);
+          const normalized = adapt(line);
+          const r = normalized ? parseLine(normalized, slug, sub) : null;
           if (r) emit(r.ev, broadcast, r.line);
         }
       }
@@ -116,46 +145,16 @@ export function readAppended(path: string, broadcast: boolean) {
 // a one-time startup cost; the per-session line store stays bounded by
 // SESSION_LINE_MAX. Sets offset to EOF so live reads only pick up new appends.
 export function seedFile(path: string) {
-  let st;
-  try {
-    st = statSync(path);
-  } catch {
-    return;
-  }
-  const slug = slugOf(path);
-  const sub = subagentPathOf(path);
-  if (sub) loadSubagentMeta(path, sub);
-  try {
-    // Read full file (seed only — first scan). Use sync read for simplicity.
-    const fd = openSync(path, "r");
-    const size = st.size;
-    const b = Buffer.allocUnsafe(size);
-    let read = 0;
-    while (read < size) {
-      const n = readSync(fd, b, read, size - read, read);
-      if (n <= 0) break;
-      read += n;
-    }
-    closeSync(fd);
-    const content = b.toString("utf8", 0, read);
-    const lines = content.split("\n").filter((l) => l.trim());
-    for (const line of lines) {
-      const r = parseLine(line, slug, sub);
-      if (r) emit(r.ev, false, r.line); // no broadcast during seed
-    }
-    fileState.set(path, { offset: read, partial: "" });
-  } catch (e) {
-    log("seed error", path, e);
-  }
+  readAppended(path, false);
 }
 
-export function listJsonlFiles(): string[] {
+function listClaudeFiles(): string[] {
   const out: string[] = [];
   let dirs: string[];
   try {
     dirs = readdirSync(PROJECTS_DIR);
   } catch (e) {
-    log("cannot read projects dir", PROJECTS_DIR, e);
+    // Either provider may be absent on this machine.
     return out;
   }
   for (const d of dirs) {
@@ -200,6 +199,25 @@ export function listJsonlFiles(): string[] {
   return out;
 }
 
+export function listJsonlFiles(): string[] {
+  const out = listClaudeFiles();
+  const seen = new Set<string>();
+  const walk = (dir: string) => {
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.isFile() && entry.name.endsWith(".jsonl") && !seen.has(entry.name)) {
+          seen.add(entry.name);
+          out.push(path);
+        }
+      }
+    } catch { /* Codex need not be installed; rescan discovers dirs created later. */ }
+  };
+  for (const dir of CODEX_SESSION_DIRS) walk(dir);
+  return out;
+}
+
 export function firstScan() {
   const files = listJsonlFiles();
   const now = Date.now();
@@ -238,9 +256,8 @@ export function rescan() {
         try {
           const st = statSync(p);
           if (Date.now() - st.mtimeMs <= SEED_MTIME_WINDOW_MS) {
-            seedFile(p);
-            // Broadcast nothing during seed; but a genuinely new active file will
-            // continue to append and stream live from here.
+            readAppended(p, true);
+            // New sessions must appear in already-connected dashboards.
           } else {
             fileState.set(p, { offset: st.size, partial: "" });
           }
@@ -256,22 +273,35 @@ export function rescan() {
 
 // Recursive watch. On any change to a .jsonl, read its appended bytes.
 export function startWatch() {
-  try {
-    watch(PROJECTS_DIR, { recursive: true }, (_event, filename) => {
-      if (!filename) return;
-      const name = filename.toString();
-      if (!name.endsWith(".jsonl")) return;
-      const path = join(PROJECTS_DIR, name);
-      try {
-        if (!existsSync(path)) return;
-        readAppended(path, true);
-      } catch (e) {
-        log("watch handler error", path, e);
-      }
-    });
-    log("watching (recursive):", PROJECTS_DIR);
-  } catch (e) {
-    log("recursive watch failed, relying on periodic rescan:", e);
+  for (const root of [PROJECTS_DIR, ...CODEX_SESSION_DIRS]) {
+    if (!existsSync(root)) continue;
+    try {
+      watch(root, { recursive: true }, (_event, filename) => {
+        if (!filename) return;
+        const name = filename.toString();
+        if (!name.endsWith(".jsonl")) return;
+        const path = join(root, name);
+        try {
+          if (existsSync(path)) readAppended(path, true);
+        } catch (e) {
+          log("watch handler error", path, e);
+        }
+      });
+      log("watching (recursive):", root);
+    } catch (e) {
+      log("recursive watch failed, relying on periodic rescan:", e);
+    }
   }
 }
 
+// Historical project links may target sessions outside the startup window.
+export function loadCodexSession(id: string) {
+  if (!id.startsWith("codex:") || sessions.has(id)) return;
+  const suffix = id.slice(6);
+  const path = listJsonlFiles().find(p => isCodexFile(p) &&
+    (basename(p, ".jsonl") === suffix || basename(p, ".jsonl").endsWith("-" + suffix)));
+  if (!path) return;
+  fileState.delete(path);
+  adapters.delete(path);
+  seedFile(path);
+}

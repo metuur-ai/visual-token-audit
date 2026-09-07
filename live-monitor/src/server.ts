@@ -1,3 +1,4 @@
+import { loadCodexSession } from "./watch.ts";
 // ----------------------------------------------------------------------------
 // HTTP + SSE server
 // ----------------------------------------------------------------------------
@@ -121,6 +122,16 @@ export function startHttpServer(opts: { host: string; port: number; publicDir: s
     const url = new URL(req.url);
     const path = url.pathname;
 
+    // Only managed background instances expose control. The secret is stored in
+    // a private local state file; browser requests cannot stop the collector.
+    if (path === "/api/service") {
+      const token = process.env.MONITOR_SERVICE_TOKEN;
+      if (!token || req.headers.get("Authorization") !== `Bearer ${token}`) return new Response("Not found", { status: 404 });
+      if (req.method === "POST") setTimeout(() => process.exit(0), 100);
+      else if (req.method !== "GET") return new Response("Method not allowed", { status: 405 });
+      return Response.json({ service: "live-monitor", pid: process.pid });
+    }
+
     if (path === "/" ) {
       return serveStatic("index.html", "text/html; charset=utf-8");
     }
@@ -130,6 +141,7 @@ export function startHttpServer(opts: { host: string; port: number; publicDir: s
     if (path === "/observe" || path === "/observe.html") {
       return serveStatic("observe.html", "text/html; charset=utf-8");
     }
+    if (path === "/codex-observe.js") return serveStatic("codex-observe.js", "text/javascript; charset=utf-8");
     if (path === "/observe.js") {
       return serveStatic("observe.js", "text/javascript; charset=utf-8");
     }
@@ -179,6 +191,7 @@ export function startHttpServer(opts: { host: string; port: number; publicDir: s
     }
     if (path.startsWith("/api/session/")) {
       const id = decodeURIComponent(path.slice("/api/session/".length));
+      loadCodexSession(id);
       const json = id ? buildSessionDetail(id) : null;
       if (json === null) {
         return new Response(JSON.stringify({ error: "unknown session" }), {
@@ -192,6 +205,7 @@ export function startHttpServer(opts: { host: string; port: number; publicDir: s
     }
     if (path.startsWith("/api/observe/")) {
       const id = decodeURIComponent(path.slice("/api/observe/".length));
+      loadCodexSession(id);
       const json = id ? buildObserveSnapshot(id) : null;
       if (json === null) {
         return new Response(JSON.stringify({ error: "unknown session" }), {

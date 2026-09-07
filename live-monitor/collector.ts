@@ -1,4 +1,4 @@
-// Live Claude Code session monitor — collector (server half).
+// Live Claude Code and Codex session monitor — collector (server half).
 // Bun + TypeScript, ZERO npm dependencies. Entry/bootstrap.
 //
 // Watches ~/.claude/projects/**/*.jsonl (Claude Code transcripts), parses each
@@ -15,7 +15,7 @@
 import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 
-import { HOST, PORT, PROJECTS_DIR, RESCAN_INTERVAL_MS } from "./src/config.ts";
+import { HOST, PORT, PROJECTS_DIR, CODEX_SESSION_DIRS, RESCAN_INTERVAL_MS } from "./src/config.ts";
 import { startHttpServer } from "./src/server.ts";
 import { log } from "./src/util.ts";
 import { firstScan, rescan, startWatch } from "./src/watch.ts";
@@ -42,4 +42,4 @@ try {
 startWatch();
 setInterval(rescan, RESCAN_INTERVAL_MS);
 
-log(`listening on http://${HOST}:${server.port}  (watching ${PROJECTS_DIR})`);
+log(`listening on http://${HOST}:${server.port}  (watching ${[PROJECTS_DIR, ...CODEX_SESSION_DIRS].join(", ")})`);

@@ -11,6 +11,8 @@ const sessions = new Map();
 const feedItems = [];           // MonitorEvent[], newest-first, capped 200
 const FEED_CAP = 200;
 const ACTIVE_THRESHOLD_MS = 60_000;
+let providerFilter = 'all';
+const matchesProvider = item => providerFilter === 'all' || (item.provider ?? 'claude') === providerFilter;
 
 /** Currently open session id, or null */
 let openSessionId = null;
@@ -159,7 +161,7 @@ function fmtRange(firstTs, lastTs) {
 }
 
 function shortId(id) {
-  return id ? id.slice(0, 8) : '?';
+  return id ? id.replace(/^codex:/, '').slice(0, 8) : '?';
 }
 
 function isActive(isoStr) {
@@ -181,13 +183,14 @@ function safe(s) { return s == null ? '' : String(s); }
 function recomputeTotals() {
   let totalEvents = 0, input = 0, output = 0, cr = 0, cw = 0;
   for (const s of sessions.values()) {
+    if (!matchesProvider(s)) continue;
     totalEvents += s.events ?? 0;
     input  += s.usage?.input      ?? 0;
     output += s.usage?.output     ?? 0;
     cr     += s.usage?.cacheRead  ?? 0;
     cw     += s.usage?.cacheWrite ?? 0;
   }
-  tSessions.textContent = sessions.size;
+  tSessions.textContent = [...sessions.values()].filter(matchesProvider).length;
   tEvents.textContent   = fmt(totalEvents);
   tInput.textContent    = fmt(input);
   tOutput.textContent   = fmt(output);
@@ -197,7 +200,7 @@ function recomputeTotals() {
 
 // ── Sessions table ────────────────────────────────────────────────────────────
 function renderSessions() {
-  const sorted = [...sessions.values()].sort(
+  const sorted = [...sessions.values()].filter(matchesProvider).sort(
     (a, b) => new Date(b.lastTs ?? 0) - new Date(a.lastTs ?? 0)
   );
 
@@ -225,7 +228,7 @@ function renderSessions() {
     const cells = [
       () => {
         const td = document.createElement('td');
-        td.textContent = safe(s.project);
+        td.textContent = (s.provider === 'codex' ? 'Codex · ' : 'Claude · ') + safe(s.project);
         return withTip(td, s.project, 'Project');
       },
       () => {
@@ -338,7 +341,7 @@ function makeFeedItem(ev) {
 
   const projEl = document.createElement('span');
   projEl.className = 'feed-proj';
-  projEl.textContent = safe(ev.project);
+  projEl.textContent = (ev.provider === 'codex' ? 'Codex · ' : 'Claude · ') + safe(ev.project);
   projEl.title = safe(ev.project);
 
   const badgeEl = document.createElement('span');
@@ -378,6 +381,7 @@ function prependFeedItem(ev) {
   const emptyLi = feedList.querySelector('li.empty');
   if (emptyLi) emptyLi.remove();
 
+  if (!matchesProvider(ev)) return;
   const li = makeFeedItem(ev);
   feedList.insertBefore(li, feedList.firstChild);
 
@@ -392,6 +396,7 @@ function applyEventToSession(ev) {
   if (!agg) {
     agg = {
       sessionId: ev.sessionId,
+      provider: ev.provider ?? "claude",
       project:   ev.project,
       firstTs:   ev.ts,
       lastTs:    ev.ts,
@@ -455,6 +460,7 @@ async function loadSnapshot() {
     for (const s of data.sessions) {
       sessions.set(s.sessionId, {
         sessionId: s.sessionId,
+        provider: s.provider ?? "claude",
         project:   s.project,
         firstTs:   s.firstTs,
         lastTs:    s.lastTs,
@@ -480,8 +486,7 @@ async function loadSnapshot() {
     const evs = [...data.events].reverse().slice(0, FEED_CAP);
     for (const ev of evs) {
       feedItems.push(ev);
-      const li = makeFeedItem(ev);
-      feedList.appendChild(li);
+      if (matchesProvider(ev)) feedList.appendChild(makeFeedItem(ev));
     }
   } else {
     feedList.innerHTML = '<li class="empty">No events yet.</li>';
@@ -911,6 +916,9 @@ function renderDetail(detail) {
       metaItems.push(['Now', fmt(detail.context.lastTokens) + ' tok']);
     }
   }
+  if (detail.provider === 'codex') {
+    metaItems.push(['Provider', 'Codex'], ['Est. Cost', 'Unavailable'], ['Reasoning (within output)', fmt(detail.usage?.reasoning)]);
+  }
   if (detail.cost && detail.cost.totalUSD > 0) {
     metaItems.push(['Est. Cost', '~$' + detail.cost.totalUSD.toFixed(2)]);
   }
@@ -946,6 +954,9 @@ function renderDetail(detail) {
   }
 
   // ── 2b. Cost estimation (v2.3) ──────────────────────────────────────────────
+  if (detail.provider === 'codex') {
+    metaItems.push(['Provider', 'Codex'], ['Est. Cost', 'Unavailable'], ['Reasoning (within output)', fmt(detail.usage?.reasoning)]);
+  }
   if (detail.cost && detail.cost.totalUSD > 0) {
     const costCard = el('div', 'detail-card');
     costCard.appendChild(el('div', 'section-heading', 'Cost Estimation — ~$' + detail.cost.totalUSD.toFixed(2)));
@@ -1179,6 +1190,13 @@ setInterval(() => {
     else if (e.key === 'Home') { mainEl.style.removeProperty(varName()); e.preventDefault(); }
   });
 }
+
+document.getElementById('provider-filter').addEventListener('change', e => {
+  providerFilter = e.target.value;
+  recomputeTotals();
+  renderSessions();
+  feedList.replaceChildren(...feedItems.filter(matchesProvider).map(makeFeedItem));
+});
 
 // ── Init ──────────────────────────────────────────────────────────────────────
 setConnStatus('');

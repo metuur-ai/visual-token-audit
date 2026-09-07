@@ -1,3 +1,4 @@
+import { transcriptLines } from "./transcripts.ts";
 // ----------------------------------------------------------------------------
 // v4: global usage statistics (/api/stats) — self-contained on-disk scan.
 // In-memory state only covers SEED_MTIME_WINDOW_MS (~48h), so this endpoint
@@ -78,6 +79,8 @@ export function buildStatsJSON(days: number): string {
   let prompts = 0;
   let tokens = 0;
   let cost = 0;
+  let codexTokens = 0;
+  const providers = { claude: { tokens: 0, prompts: 0 }, codex: { tokens: 0, prompts: 0 } };
   const skills = new Map<string, StatEntity>();
   const commands = new Map<string, StatEntity>();
   const rules = new Map<string, StatEntity>();
@@ -131,10 +134,7 @@ export function buildStatsJSON(days: number): string {
     let contributed = false;
     let projectAdded = false;
 
-    for (let s = 0, e = 0; s < raw.length; s = e + 1) {
-      e = raw.indexOf("\n", s);
-      if (e === -1) e = raw.length;
-      const line = raw.slice(s, e);
+    for (const line of transcriptLines(f.path, raw)) {
       if (!line) continue;
       // Cheap substring pre-filters before JSON.parse (files can be huge).
       const isAsst = line.includes('"type":"assistant"');
@@ -155,6 +155,7 @@ export function buildStatsJSON(days: number): string {
       const di = dayIdx.get(localDayKey(tsMs));
       const sid = sub?.parentSessionId ?? (typeof o.sessionId === "string" ? o.sessionId : fallbackSid);
       const msg = o.message;
+      const provider = o.provider === "codex" ? "codex" : "claude";
 
       contributed = true;
       sessionsSeen.add(sid);
@@ -169,11 +170,13 @@ export function buildStatsJSON(days: number): string {
         if (u) {
           const tok = u.input + u.output + u.cacheRead + u.cacheWrite;
           tokens += tok;
+          providers[provider].tokens += tok;
+          if (provider === "codex") codexTokens += tok;
           fileTok += tok;
           if (di !== undefined) dayTokens[di] += tok;
           const model = typeof msg?.model === "string" ? msg.model : "unknown";
           if (model !== "<synthetic>") {
-            cost += costUSD(model, u);
+            if (provider !== "codex") cost += costUSD(model, u);
             const me = models.get(model) ?? { count: 0, tokens: 0 };
             me.count++;
             me.tokens += tok;
@@ -250,6 +253,7 @@ export function buildStatsJSON(days: number): string {
       }
       if (!ptext.trim()) continue;
       prompts++;
+      providers[provider].prompts++;
       if (di !== undefined) dayPrompts[di]++;
       const command = detectCommand(ptext);
       if (command) {
@@ -305,12 +309,15 @@ export function buildStatsJSON(days: number): string {
   const json = JSON.stringify({
     days,
     generatedAt: new Date().toISOString(),
+    providers,
     totals: {
       sessions: sessionsSeen.size,
       projects: projectsSeen.size,
       prompts,
       tokens,
-      cost,
+      cost: codexTokens > 0 ? null : cost,
+      knownCost: cost,
+      unpricedTokens: codexTokens,
       agentRuns: sum(agentsOut),
       skillInvocations: sum(skillsOut),
       commandRuns: sum(commandsOut),

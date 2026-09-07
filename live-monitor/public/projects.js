@@ -91,7 +91,7 @@ function ProjectCard({ p, delay }) {
         </tr></thead>
         <tbody>
           ${p.sessions.map(s => html`<tr key=${s.sessionId} onClick=${() => go(s.sessionId)} title=${s.sessionId}>
-            <td><a class="sid" href=${sessionHref(s.sessionId)} onClick=${e => e.stopPropagation()}>${shortSid(s.sessionId)}</a></td>
+            <td><a class="sid" href=${sessionHref(s.sessionId)} onClick=${e => e.stopPropagation()}>${s.provider === 'codex' ? 'Codex' : 'Claude'} · ${shortSid(s.sessionId.replace(/^codex:/, ''))}</a></td>
             <td>${rel(s.lastTs)}</td>
             <td>${int(s.prompts)}</td>
             <td>${fmt(s.usage.input)}</td>
@@ -153,7 +153,7 @@ function App() {
 
   if (!data.projects.length) return html`${top}<main><div class="state">
     <div class="big-msg">no projects yet</div>
-    <div>no sessions found in the last ${data.days || days} days — start a Claude Code session and they'll appear here.</div>
+    <div>no sessions found in the last ${data.days || days} days — start a Claude Code or Codex session and they'll appear here.</div>
   </div></main>`;
 
   /* Derived during render (R-5.4), never stored — the filtered list therefore

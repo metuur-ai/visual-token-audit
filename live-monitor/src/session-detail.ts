@@ -290,12 +290,12 @@ export function buildSessionDetail(sessionId: string): string | null {
     u.output += ln.usage.output;
     u.cacheRead += ln.usage.cacheRead;
     u.cacheWrite += ln.usage.cacheWrite;
-    if (!ln.sidechain) {
+    if (!ln.sidechain && (ln.provider !== "codex" || ln.contextTokens !== undefined)) {
       // Current context ≈ what the last main-chain call read:
       // fresh input + cache read + cache write.
       lastCtx = {
         model: ln.model,
-        tokens: ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite,
+        tokens: ln.contextTokens ?? (ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite),
         ts: ln.ts,
       };
       if (!peakCtx || lastCtx.tokens > peakCtx.tokens) peakCtx = lastCtx;
@@ -325,6 +325,7 @@ export function buildSessionDetail(sessionId: string): string | null {
 
   const detail = {
     sessionId: agg.sessionId,
+    provider: agg.provider ?? "claude",
     project: agg.project,
     ...(agg.cwd ? { cwd: agg.cwd } : {}),
     ...(peakCtx
@@ -333,12 +334,12 @@ export function buildSessionDetail(sessionId: string): string | null {
             model: peakCtx.model,
             tokens: peakCtx.tokens,
             ts: peakCtx.ts,
-            window: contextWindowForModel(peakCtx.model, peakCtx.tokens),
+            window: agg.provider === "codex" ? [...lines].reverse().find(l => l.contextWindow)?.contextWindow ?? null : contextWindowForModel(peakCtx.model, peakCtx.tokens),
             lastTokens: lastCtx!.tokens,
           },
         }
       : {}),
-    cost: { totalUSD, byModel, byCategory },
+    cost: agg.provider === "codex" ? { totalUSD: null, byModel: [], byCategory: null, reason: "Codex billing is not recorded in local rollouts" } : { totalUSD, byModel, byCategory },
     dispatches,
     firstTs: agg.firstTs,
     lastTs: agg.lastTs,

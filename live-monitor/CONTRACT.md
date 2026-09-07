@@ -178,3 +178,47 @@ waste framing — never flagged as wasted.
   4. **Invocation tree** — collapsible indented tree (details/summary or custom toggles): each node shows kind badge, name, time, attributed tokens, durationMs and resultBytes when present. Prompts collapsed by default except the most recent one. Pure DOM, no libs.
 - Re-fetch the open session detail when SSE delivers an event for that session (debounce 2s).
 - Escape everything transcript-derived via `textContent`. Compact numbers. Relative times every 10s.
+
+## Codex additions
+
+Existing Claude session IDs and token fields retain their meanings. These fields
+are additive:
+
+- `MonitorEvent.provider`, `SessionAgg.provider`, session detail `provider`,
+  Observe `session.provider`, and project session record `provider`:
+  `"claude" | "codex"`. Older clients may treat absence as Claude.
+- Codex IDs are `codex:<session_meta.payload.id>`; URL-encode IDs in API paths.
+- `Usage.reasoning?: number`: reasoning output tokens, already included in
+  `output`. Do not add this field to usage totals.
+- Codex usage events carry `contextTokens?` (last request input) and
+  `contextWindow?` (reported capacity). These are not cumulative usage.
+- Codex detail `cost.totalUSD` and Observe node `cost` are `null` (unavailable).
+  Codex Observe `cap` can be `null` if the log supplies no capacity, and omits
+  Claude-specific `baseBreakdown` and `ctxBreakdown`.
+- Stats adds `providers: { claude: { tokens, prompts }, codex: { tokens, prompts } }`.
+  `totals.cost` is `null` when the window contains unpriced Codex tokens;
+  `totals.knownCost` contains the Claude estimate and `totals.unpricedTokens`
+  counts Codex tokens. Unknown cost must not render as zero.
+
+Both historical endpoints normalize cumulative Codex counters before filtering
+by timestamp, avoiding overcounting the first event in a requested date window.
+
+Codex Observe `selfTok` includes cached input so its displayed total matches
+Codex usage totals. Claude Observe retains its existing fresh-input-plus-output
+definition. Both exclude descendant sessions.
+
+### Codex Observe evidence
+
+`recordedContext` contains `{ kind, name, path?, tokens }` entries extracted from
+serialized startup instructions. Tokens are byte-based estimates. `callDetails`
+contains up to 200 retained outer calls with `id`, `name`, `at`, `input`,
+`inputTruncated`, `output?`, `resultBytes?`, `status`, `durationMs?`, and
+`nestedRequests`. `nestedToolRequests` groups source references by name and count;
+it is not an executed-call counter. `coverage` reports retained lines versus
+collected events.
+
+Codex events/aggregates optionally carry `parentSessionId` and `agentName` from
+rollout metadata. Observe links collected descendants (depth <=4, bounded tree),
+keeps root `selfTok` exclusive of child usage, and invalidates cached trees when
+Codex child activity changes. Child nodes expose their own `usage` and reported
+`contextWindow` when present.

@@ -1,14 +1,15 @@
 {
   "name": "@metuur/claude-live-monitor",
   "version": "0.2.6",
-  "description": "Zero-dependency live monitor for Claude Code session transcripts (HTTP + SSE dashboard).",
+  "description": "Zero-dependency live monitor for Claude Code and Codex session transcripts (HTTP + SSE dashboard).",
   "type": "module",
   "repository": {
     "type": "git",
     "url": "https://github.com/metuur-ai/visual-token-audit"
   },
   "bin": {
-    "claude-live-monitor": "bin/cli.js"
+    "claude-live-monitor": "bin/cli.js",
+    "codex-live-monitor": "bin/cli.js"
   },
   "publishConfig": {
     "access": "public"
@@ -25,14 +26,20 @@
   "scripts": {
     "start": "bun run collector.ts",
     "build": "bun build collector.ts --target node --outfile dist/collector.js && rm -rf dist/public && cp -r public dist/public && rm -rf dist/vendor && mkdir -p dist/vendor && cp src/vendor/o200k_base.tiktoken dist/vendor/",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "test": "bun test",
+    "start:background": "node bin/cli.js start",
+    "stop": "node bin/cli.js stop",
+    "status": "node bin/cli.js status",
+    "pretest": "npm run build"
   },
   "keywords": [
     "claude",
     "claude-code",
     "monitor",
     "tokens",
-    "sse"
+    "sse",
+    "codex"
   ],
   "license": "MIT"
 }

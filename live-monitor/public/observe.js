@@ -1,3 +1,4 @@
+import { CodexRegistry } from "./codex-observe.js";
 /* observe.js — Session Observability UI (Preact + htm, no build step).
    Data: GET /api/snapshot (session picker), GET /api/observe/<id> (entity model, spec §2). */
 import { h, render } from '/vendor/preact.module.js';
@@ -28,7 +29,8 @@ const PRELOAD_NOUN = { skill: 'skill description', agent: 'custom agent', memory
 
 /* ============================ helpers ============================ */
 const fmt = n => { n = n || 0; return n >= 1000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : '' + Math.round(n); };
-const money = n => '$' + (n || 0).toFixed(2);
+const money = n => n == null ? 'Unavailable' : '$' + (n || 0).toFixed(2);
+const estimate = n => n == null ? 'Unavailable' : '~' + money(n);
 const durFmt = ms => {
   if (!ms || ms < 0) ms = 0;
   const s = ms / 1000;
@@ -85,8 +87,8 @@ function buildModel(data) {
   const rolls = {};
   const roll = n => {
     if (rolls[n.id]) return rolls[n.id];
-    let tok = n.selfTok || 0, cost = n.cost || 0, agents = 0, tools = toolTotal(n), turns = n.turns || 0;
-    n.children.forEach(c => { const r = roll(c); tok += r.tok; cost += r.cost; agents += 1 + r.agents; tools += r.tools; turns += r.turns; });
+    let tok = n.selfTok || 0, cost = n.cost ?? null, agents = 0, tools = toolTotal(n), turns = n.turns || 0;
+    n.children.forEach(c => { const r = roll(c); tok += r.tok; cost = cost == null || r.cost == null ? null : cost + r.cost; agents += 1 + r.agents; tools += r.tools; turns += r.turns; });
     return (rolls[n.id] = { tok, cost, agents, tools, turns });
   };
   roll(root);
@@ -108,10 +110,15 @@ function buildModel(data) {
 
   return {
     byId, root, rolls, rollDur: n => durs[n.id] ?? rollDur(n), depth, walk, descDyn, parentOf, order,
-    cap: data.cap || CAP_FALLBACK,
+    cap: data.session?.provider === 'codex' ? data.cap : data.cap || CAP_FALLBACK,
     waste: data.waste || null,
     session: data.session || null,
     generatedAt: data.generatedAt,
+    recordedContext: data.recordedContext || [],
+    callDetails: data.callDetails || [],
+    reviews: data.reviews || [],
+    nestedToolRequests: data.nestedToolRequests || [],
+    coverage: data.coverage,
   };
 }
 
@@ -242,7 +249,7 @@ function SessionStrip({ sessions, sid, setSid }) {
     aria-current=${s.sessionId === sid ? 'true' : 'false'} title=${(s.project || '?') + ' · ' + s.sessionId}>
     <span class="pk-dot"></span>
     <span class="ss-p">${s.project || '?'}</span>
-    <span class="pk-id">${String(s.sessionId).slice(0, 8)}</span>
+    <span class="pk-id">${s.provider === 'codex' ? 'Codex' : 'Claude'} · ${String(s.sessionId).replace(/^codex:/, '').slice(0, 8)}</span>
     <span class="ss-meta num">${rel(s.lastTs)}</span>
   </a>`;
 
@@ -270,7 +277,7 @@ function SessionStrip({ sessions, sid, setSid }) {
           class="pk-row ${s.sessionId === sid ? 'sel' : ''}" href=${sessHref(s.sessionId)} onClick=${e => pick(e, s.sessionId)}>
           <span class="pk-dot off"></span>
           <span class="pk-p">${s.project || '?'}</span>
-          <span class="pk-id">${String(s.sessionId).slice(0, 8)}</span>
+          <span class="pk-id">${s.provider === 'codex' ? 'Codex' : 'Claude'} · ${String(s.sessionId).replace(/^codex:/, '').slice(0, 8)}</span>
           <span class="pk-meta num">${s.prompts ? s.prompts + ' prompt' + (s.prompts === 1 ? '' : 's') + ' · ' : ''}${rel(s.lastTs)}</span>
           <span class="pk-ck">${s.sessionId === sid ? '✓' : ''}</span>
         </a>`)}
@@ -298,7 +305,15 @@ function TreeNode({ node, m, sel, onSel, open, toggle }) {
 }
 
 function ContextPanel({ n, m }) {
-  const cap = m.cap;
+  const cap = n.contextWindow ?? m.cap;
+  const usage = n.usage ?? m.session?.usage;
+  if (m.session?.provider === 'codex') return html`<section class="panel fade">
+    <div class="ph"><span class="pt">Codex context</span><span class="psub">${n.model || ''}</span></div>
+    <div class="big">${fmt(n.ctx)} <span>${cap ? '/ ' + fmt(cap) : 'tokens'}</span></div>
+    <div class="psub">Peak request input · capacity ${cap ? 'reported by Codex' : 'unavailable'}</div>
+    <div class="rows">${[['Fresh input', usage?.input], ['Cached input', usage?.cacheRead], ['Output', usage?.output], ['Reasoning (included in output)', usage?.reasoning]].map(([label, value]) => html`<div class="row"><span class="k">${label}</span><span class="v num">${fmt(value)}</span></div>`)}</div>
+    <div class="lp-d">Token totals include cached input. Startup instructions and tool activity are shown below; billed cost is not recorded in the rollout.</div>
+  </section>`;
   const buf = n === m.root ? AUTOCOMPACT_BUF : 0;
   const cb = n.ctxBreakdown;
 
@@ -363,7 +378,7 @@ function AggregatePanel({ n, m, scope }) {
   const selfTools = toolTotal(n);
   const mets = [
     ['Total tokens', fmt(t ? r.tok : n.selfTok), t ? 'self ' + fmt(n.selfTok) + ' + ' + fmt(r.tok - (n.selfTok || 0)) + ' below' : 'excludes descendants'],
-    ['Est. cost', '~' + money(t ? r.cost : n.cost), t ? 'self ' + money(n.cost) : 'this agent only', 'o'],
+    ['Est. cost', estimate(t ? r.cost : n.cost), t ? 'self ' + money(n.cost) : 'this agent only', 'o'],
     ['Wall time', durFmt(t ? m.rollDur(n) : n.dur), t ? 'children run inside this span' : 'own execution'],
     ['Tool calls', '' + (t ? r.tools : selfTools), Object.keys(n.tools || {}).length + ' distinct here'],
     ['Sub-agents', '' + r.agents, r.agents ? 'depth ' + m.depth(n) : 'leaf node'],
@@ -486,6 +501,22 @@ function skillBudgetRow(sb) {
 }
 
 function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, toggleGrp }) {
+  if (m.session?.provider === 'codex') {
+    if (n.evidence) m = { ...m, ...n.evidence };
+    const resources = m.recordedContext;
+    const instructions = resources.filter(r => r.kind !== 'skill');
+    return html`<section class="panel fade">
+      <div class="ph"><span class="pt">Recorded instructions</span><span class="psub">${instructions.length} instruction blocks</span></div>
+      <div class="lp-d">Instructions serialized in this session. Sizes are byte-based token estimates, not measured context occupancy. Skills with session activity appear in the resource details above.</div>
+      <div class="rows">${instructions.map(r => html`<div class="row"><span class="k">${r.name}</span><span class="v num">~${fmt(r.tokens)} tokens</span></div>`)}</div>
+      ${!resources.length ? html`<div class="empty">Startup context is not present in the retained transcript records.</div>` : null}
+      ${m.coverage?.bounded ? html`<div class="lp-d">Activity detail covers the latest ${m.coverage.retainedLines} retained records; token totals cover the full collected session.</div>` : null}
+      <div class="ph" style="margin-top:18px"><span class="pt">Tools requested inside exec</span></div>
+      <div class="lp-d">Tool references extracted from wrapper source. These can include conditional or repeated calls; they are separate from confirmed outer tool-call counts.</div>
+      <div class="rows">${m.nestedToolRequests.map(r => html`<div class="row"><span class="k">${r.name}</span><span class="v num">${r.count}</span></div>`)}</div>
+      ${!m.nestedToolRequests.length ? html`<div class="empty">No nested tool references recorded.</div>` : null}
+    </section>`;
+  }
   const pre = n.pre || [];
   const tot = sum(pre, p => p.tk), waste = sum(pre.filter(p => !p.used), p => p.tk);
   // True preloaded floor from usage accounting (turn-1 window minus first prompt).
@@ -654,6 +685,34 @@ function UsagePanel({ n, m, scope }) {
   </section>`;
 }
 
+function SubagentBreakdown({ n, m, onSel }) {
+  const agents = [];
+  const collect = parent => (parent.children || []).forEach(child => {
+    if (child.type === 'agent') agents.push(child);
+    collect(child);
+  });
+  collect(n);
+  const total = agents.reduce((value, agent) => value + (agent.selfTok || 0), 0);
+  return html`<section class="panel fade">
+    <div class="ph"><span class="pt">Subagent breakdown</span><span class="psub">${agents.length} agents · ${fmt(total)} tokens</span></div>
+    ${agents.length === 0 ? html`<div class="empty">No child-agent executions recorded for this ${n.type === 'agent' ? 'agent' : 'session'}.</div>` : html`
+      <div class="lp-d">Each row shows that agent’s own usage, excluding its children. Select an agent to inspect its context and tools, including its call inputs and results, without leaving this session.</div>
+      <div style="overflow-x:auto"><table>
+        <thead><tr><th>Agent</th><th>Parent</th><th>Model</th><th class="r">Total tokens</th><th class="r">Fresh input</th><th class="r">Cached input</th><th class="r">Output</th><th class="r">Reasoning*</th><th class="r">Tool calls</th><th class="r">Elapsed</th><th>Details</th></tr></thead>
+        <tbody>${agents.map(agent => html`<tr key=${agent.id}>
+          <td><button onClick=${() => onSel(agent.id)} style="color:var(--blue,#2563eb);cursor:pointer;background:none;border:0;padding:0;text-align:left">${agent.name}</button></td>
+          <td>${m.byId[agent.parentId]?.name || '—'}</td><td>${agent.model || '—'}</td>
+          <td class="r num">${fmt(agent.selfTok)}</td><td class="r num">${agent.usage ? fmt(agent.usage.input) : '—'}</td>
+          <td class="r num">${agent.usage ? fmt(agent.usage.cacheRead) : '—'}</td><td class="r num">${agent.usage ? fmt(agent.usage.output) : '—'}</td>
+          <td class="r num">${agent.usage?.reasoning != null ? fmt(agent.usage.reasoning) : '—'}</td>
+          <td class="r num">${toolTotal(agent)}</td><td class="r num">${durFmt(agent.dur)}</td>
+          <td><button onClick=${() => onSel(agent.id)}>Inspect agent →</button></td>
+        </tr>`)}</tbody>
+      </table></div><div class="lp-d">* Reasoning is included in output. Elapsed times can overlap when agents run concurrently.</div>
+    `}
+  </section>`;
+}
+
 function Timeline({ m, sel, onSel }) {
   const [tip, setTip] = useState(null); // {x, y, t, s} — custom tooltip, fixed-position
   const showTip = (e, t, s) => setTip({ x: e.clientX, y: e.clientY, t, s });
@@ -668,12 +727,12 @@ function Timeline({ m, sel, onSel }) {
   let skillLoads = 0, cmdRuns = 0;
   m.walk(root, n => (n.dyn || []).forEach(d => { if (d.k === 'skill') skillLoads++; if (d.k === 'command') cmdRuns++; }));
   const chips = [
-    ['' + m.order.length, 'agents'],
+    ['' + m.order.length, 'lanes'],
     ['' + R.tools, 'tool calls'],
     ['' + skillLoads, 'skill loads'],
     ['' + cmdRuns, 'commands'],
     [fmt(R.tok), 'tokens'],
-    ['~' + money(R.cost), 'cost'],
+    [estimate(R.cost), 'cost'],
     [durFmt(span), 'wall time'],
   ];
   const ticks = [];
@@ -692,8 +751,8 @@ function Timeline({ m, sel, onSel }) {
         <span class="lane-n ${sel === n.id ? 'sel' : ''}" onClick=${() => onSel(n.id)} title=${n.label || n.name}>${n.name}</span>
         <span class="track">
           <span class="span" style="left:${left}%;width:${Math.min(w, 100 - left)}%;background:${n.type === 'session' ? '#6b7280' : COLOR.agent}"
-            onMouseEnter=${e => showTip(e, n.label || n.name, `${durFmt(n.dur || 0)} · ${fmt(n.selfTok)} tok · ${money(n.cost || 0)}`)}
-            onMouseMove=${e => showTip(e, n.label || n.name, `${durFmt(n.dur || 0)} · ${fmt(n.selfTok)} tok · ${money(n.cost || 0)}`)}
+            onMouseEnter=${e => showTip(e, n.label || n.name, `${durFmt(n.dur || 0)} · ${fmt(n.selfTok)} tok · ${money(n.cost)}`)}
+            onMouseMove=${e => showTip(e, n.label || n.name, `${durFmt(n.dur || 0)} · ${fmt(n.selfTok)} tok · ${money(n.cost)}`)}
             onMouseLeave=${hideTip}></span>
           ${(n.dyn || []).map(d => {
             const a = Date.parse(d.at);
@@ -735,9 +794,21 @@ function App() {
       .then(r => { if (!r.ok) throw new Error('snapshot HTTP ' + r.status); return r.json(); })
       .then(j => {
         if (!alive) return;
-        const ss = (j.sessions || []).slice().sort((a, b) => String(b.lastTs).localeCompare(String(a.lastTs)));
+        const allSessions = j.sessions || [];
+        const ss = allSessions.filter(s => !s.parentSessionId).slice().sort((a, b) => String(b.lastTs).localeCompare(String(a.lastTs)));
         setSessions(ss);
-        setSid(cur => cur || (ss[0] && ss[0].sessionId) || null); // keep URL/user choice even if absent from this snapshot
+        setSid(cur => {
+          let rootId = cur;
+          const visited = new Set();
+          while (rootId && !visited.has(rootId)) {
+            visited.add(rootId);
+            const parent = allSessions.find(s => s.sessionId === rootId)?.parentSessionId;
+            if (!parent) break;
+            rootId = parent;
+          }
+          if (rootId !== cur) setSel(cur);
+          return rootId || ss[0]?.sessionId || null;
+        }); // keep URL/user choice even if absent from this snapshot
       })
       .catch(e => { if (alive && !sessions) setErr(String(e.message || e)); });
     load();
@@ -795,16 +866,16 @@ function App() {
     </nav>
     <span class="tstat"><span class="l">agents</span><span class="v num">${R ? R.agents : '—'}</span></span>
     <span class="tstat"><span class="l">tokens</span><span class="v num">${R ? fmt(R.tok) : '—'}</span></span>
-    <span class="tstat"><span class="l">preloaded</span><span class="v num">${m ? fmt(preTot) : '—'}</span></span>
-    <span class="tstat"><span class="l">never used</span><span class="v warn num">${w ? fmt(w.wasted) + ' (' + (w.observableTotal ? Math.round(w.wasted / w.observableTotal * 100) : 0) + '%)' : '—'}</span></span>
-    <span class="tstat"><span class="l">cost</span><span class="v num">${R ? '~' + money(R.cost) : '—'}</span></span>
+    <span class="tstat"><span class="l">${m?.session?.provider === 'codex' ? 'recorded context' : 'preloaded'}</span><span class="v num">${m ? (m.session?.provider === 'codex' ? '~' + fmt(sum(m.recordedContext, r => r.tokens)) : fmt(preTot)) : '—'}</span></span>
+    <span class="tstat"><span class="l">never used</span><span class="v warn num">${w && m?.session?.provider !== 'codex' ? fmt(w.wasted) + ' (' + (w.observableTotal ? Math.round(w.wasted / w.observableTotal * 100) : 0) + '%)' : '—'}</span></span>
+    <span class="tstat"><span class="l">cost</span><span class="v num">${R ? estimate(R.cost) : '—'}</span></span>
     <span class="live ${stale || (err && !m) ? 'err' : ''}">${stale ? 'stale' : 'live'}</span>
   </div>`;
 
   if (!m) {
     return html`${top}${strip}<div class="state">
       ${err ? html`<div class="big-msg">Cannot load data</div><div>${err}</div><div style="margin-top:6px" class="mut">retrying every ${POLL_MS / 1000}s…</div>`
-        : sessions && sessions.length === 0 ? html`<div class="big-msg">No sessions observed yet</div><div>Start a Claude Code session and this page will pick it up.</div>`
+        : sessions && sessions.length === 0 ? html`<div class="big-msg">No sessions observed yet</div><div>Start a Claude Code or Codex session and this page will pick it up.</div>`
         : html`<div class="big-msg">Loading…</div><div class="mut">fetching ${sid ? '/api/observe/' + String(sid).slice(0, 8) + '…' : '/api/snapshot'}</div>`}
     </div>`;
   }
@@ -827,7 +898,7 @@ function App() {
         ${isRoot ? html`<span title=${m.session ? m.session.cwd : ''}>${m.session ? m.session.cwd : ''}</span>` : html`<span class="b b-agent">${n.type}</span>`}
         <span>${dateLine(n.start)}</span>
         <span>${durFmt(scope === 'tree' ? m.rollDur(n) : n.dur)}</span>
-        <span class="cost">~${money(scope === 'tree' ? r.cost : n.cost)}</span>
+        <span class="cost">${estimate(scope === 'tree' ? r.cost : n.cost)}</span>
         <span class="chip">${n.model || '?'}</span>
       </div>
       <div class="scopebar">
@@ -842,7 +913,8 @@ function App() {
         <${ContextPanel} n=${n} m=${m} />
         <${AggregatePanel} n=${n} m=${m} scope=${scope} />
       </div>
-      <${RegistryPanel} n=${n} m=${m} reg=${reg} setReg=${setReg} />
+      ${m.session?.provider === "codex" ? html`<${SubagentBreakdown} n=${n} m=${m} onSel=${onSel} />` : null}
+      <${m.session?.provider === "codex" ? CodexRegistry : RegistryPanel} n=${n} m=${m} reg=${reg} setReg=${setReg} onSel=${onSel} />
       <${LoadingPanel} n=${n} m=${m} scope=${scope} preF=${preF} setPreF=${setPreF} dynF=${dynF} setDynF=${setDynF} grpOpen=${grpOpen} toggleGrp=${toggleGrp} />
       <${UsagePanel} n=${n} m=${m} scope=${scope} />
       <${Timeline} m=${m} sel=${selId} onSel=${onSel} />

@@ -9,7 +9,7 @@ import { join } from "path";
 
 export const HOST = "127.0.0.1";
 export const PORT = Number(process.env.MONITOR_PORT ?? 8722);
-export const PROJECTS_DIR = join(homedir(), ".claude", "projects");
+export const PROJECTS_DIR = process.env.CLAUDE_PROJECTS_DIR ?? join(homedir(), ".claude", "projects");
 
 export const RING_MAX = 5000;
 export const SEED_MTIME_WINDOW_MS = 48 * 60 * 60 * 1000; // only seed files modified in last 48h
@@ -35,3 +35,6 @@ export const AGENT_MAX_NODES = 50; // nodes per agent subtree cap
 export const STATS_DAY_MS = 86_400_000;
 
 export const startedAt = new Date().toISOString();
+
+export const CODEX_HOME = process.env.CODEX_HOME ?? join(homedir(), ".codex");
+export const CODEX_SESSION_DIRS = [join(CODEX_HOME, "sessions"), join(CODEX_HOME, "archived_sessions")];

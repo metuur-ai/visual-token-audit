@@ -110,6 +110,9 @@ export interface ObsNode {
   parentId: string | null;
   start?: string;
   dur?: number;
+  evidence?: ReturnType<typeof codexNodeEvidence>;
+  usage?: import("./types.ts").Usage;
+  contextWindow?: number;
   selfTok: number;
   cost: number;
   ctx: number;
@@ -157,8 +160,9 @@ export function obsSelf(lns: SessionLine[]) {
       // small selfTok yet a real cost. Absent/unknown model → DEFAULT_PRICING
       // (priceFor), so cost is never silently dropped when selfTok still counts.
       selfTok += ln.usage.input + ln.usage.output;
-      cost += costUSD(ln.model ?? "", ln.usage);
-      ctx = Math.max(ctx, ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite);
+      if (ln.provider === "codex") selfTok += ln.usage.cacheRead + ln.usage.cacheWrite;
+      if (ln.provider !== "codex") cost += costUSD(ln.model ?? "", ln.usage);
+      ctx = Math.max(ctx, ln.provider === "codex" ? ln.contextTokens ?? 0 : ln.usage.input + ln.usage.cacheRead + ln.usage.cacheWrite);
       turns++;
     }
     for (const tu of ln.toolUses) tools[tu.name] = (tools[tu.name] ?? 0) + 1;
@@ -296,6 +300,8 @@ export function obsDyn(
       } else {
         const srv = mcpServer(tu.name);
         if (srv) out.push({ k: "mcp", n: tu.name, tk: 0, at: ln.ts, by: trigger });
+        else if (ln.provider === "codex") out.push({ k: kind === "agent" ? "agent" : "tool", n: name,
+          tk: 0, at: ln.ts, by: trigger });
       }
     }
   }
@@ -451,6 +457,42 @@ export function buildBaseBreakdown(
   };
 }
 
+export function codexNodeEvidence(main: SessionLine[]) {
+  const reviews: Array<{ at: string; outcome: string; risk: string; authorization: string; rationale: string; request: string }> = [];
+  let request = "";
+  for (const line of main) {
+    if (line.kind === "prompt") request = line.detailText ?? line.text ?? "";
+    if (line.kind !== "assistant" || !line.detailText) continue;
+    try {
+      const decision = JSON.parse(line.detailText);
+      if (typeof decision?.outcome !== "string" || typeof decision?.rationale !== "string") continue;
+      reviews.push({ at: line.ts, outcome: decision.outcome, risk: String(decision.risk_level ?? "unknown"),
+        authorization: String(decision.user_authorization ?? "unknown"), rationale: decision.rationale, request });
+    } catch { /* Ordinary assistant prose is not a structured review decision. */ }
+  }
+  const codexResults = new Map(main.filter(l => l.toolResultFor).map(l => [l.toolResultFor!, l]));
+  const callDetails = main.flatMap(ln => ln.toolUses.map(tu => {
+    const result = codexResults.get(tu.id);
+    const input = typeof tu.input === "string" ? tu.input : JSON.stringify(tu.input ?? {});
+    return { id: tu.id, name: tu.name, at: ln.ts, input: input.slice(0, 12000),
+      inputTruncated: input.length > 12000, output: result?.detailText ?? result?.text,
+      resultBytes: result?.resultBytes, status: result ? "result recorded" : "no result retained",
+      durationMs: result ? Math.max(0, Date.parse(result.ts) - Date.parse(ln.ts)) : undefined,
+      nestedRequests: ln.nestedToolRequests ?? [] };
+  }));
+  const recorded = new Map<string, { kind: string; name: string; tokens: number; path?: string }>();
+  const nested = new Map<string, number>();
+  for (const ln of main) {
+    for (const resource of ln.codexResources ?? []) {
+      const key = resource.kind + "|" + resource.name;
+      const previous = recorded.get(key);
+      if (!previous || previous.tokens < resource.tokens) recorded.set(key, resource);
+    }
+    for (const name of ln.nestedToolRequests ?? []) nested.set(name, (nested.get(name) ?? 0) + 1);
+  }
+  return { reviews: reviews.slice(-200), recordedContext: [...recorded.values()], callDetails: callDetails.slice(-200), nestedToolRequests: [...nested].map(([name, count]) => ({ name, count })) };
+}
+
 export function buildObserveSnapshot(sessionId: string): string | null {
   const cached = observeCache.get(sessionId);
   if (cached) return cached.json;
@@ -539,7 +581,10 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     }
     return [...preMap.values()];
   };
-  const rootPre = buildPre(main);
+  const evidence = codexNodeEvidence(main);
+  const rootPre = agg.provider === "codex" ? evidence.recordedContext.map(resource => ({
+    k: resource.kind as ObsKind, n: resource.name, tk: resource.tokens, used: false, observable: false, est: true,
+  })) : buildPre(main);
 
   // ----- nodes -----
   const rootSelf = obsSelf(main);
@@ -558,17 +603,41 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     parentId: null,
     start: agg.firstTs,
     ...(rootSelf.dur !== undefined ? { dur: rootSelf.dur } : {}),
-    selfTok: rootSelf.selfTok,
+    selfTok: agg.provider === "codex" ? agg.usage.input + agg.usage.output + agg.usage.cacheRead + agg.usage.cacheWrite : rootSelf.selfTok,
+    usage: agg.usage,
     cost: rootSelf.cost,
     ctx: rootSelf.ctx,
     turns: rootSelf.turns,
     tools: rootSelf.tools,
     pre: rootPre,
     dyn: obsDyn(main, resultFor),
-    ctxBreakdown: obsBreakdown(main),
+    ...(agg.provider === "codex" ? {} : { ctxBreakdown: obsBreakdown(main) }),
     toolTokens: obsToolTokens(main, resultFor),
   };
   const nodes: ObsNode[] = [root];
+  if (agg.provider === "codex") {
+    const visited = new Set([agg.sessionId]);
+    const addChildren = (parent: string, depth: number) => {
+      if (depth > 4 || nodes.length >= 50) return;
+      for (const child of sessions.values()) {
+        if (child.provider !== "codex" || child.parentSessionId !== parent || visited.has(child.sessionId)) continue;
+        visited.add(child.sessionId);
+        const childLines = sessionLines.get(child.sessionId) ?? [];
+        const metrics = obsSelf(childLines);
+        const model = Object.keys(child.models)[0];
+        nodes.push({ id: child.sessionId, type: "agent", name: child.agentName ?? child.sessionId,
+          label: child.project, parentId: parent, model, start: child.firstTs,
+          dur: Math.max(0, Date.parse(child.lastTs) - Date.parse(child.firstTs)),
+          selfTok: child.usage.input + child.usage.output + child.usage.cacheRead + child.usage.cacheWrite,
+          evidence: codexNodeEvidence(childLines),
+          usage: child.usage, contextWindow: [...childLines].reverse().find(l => l.contextWindow)?.contextWindow,
+          cost: 0, ctx: metrics.ctx, turns: metrics.turns, tools: child.tools, pre: [],
+          dyn: obsDyn(childLines, new Map()) });
+        addChildren(child.sessionId, depth + 1);
+      }
+    };
+    addChildren(agg.sessionId, 1);
+  }
 
   // Tier 2: reconstruct the base floor from local disk (skills/agents/memory)
   // for the ROOT only — agent nodes keep pre[] evidence. getStartupInventory is
@@ -576,7 +645,7 @@ export function buildObserveSnapshot(sessionId: string): string | null {
   // `lines`, not `main`: a conditional rule is live if ANY participant touched a
   // matching file, and sub-agent lines (inline + dedicated agent-*.jsonl) are all
   // in `lines`.
-  root.baseBreakdown = buildBaseBreakdown(
+  if (agg.provider !== "codex") root.baseBreakdown = buildBaseBreakdown(
     root.ctxBreakdown?.base ?? 0,
     getStartupInventory(agg.cwd),
     invokedNames,
@@ -662,17 +731,21 @@ export function buildObserveSnapshot(sessionId: string): string | null {
 
   const json = JSON.stringify({
     v: 3,
-    cap: OBS_CAP,
+    cap: agg.provider === "codex" ? [...main].reverse().find(l => l.contextWindow)?.contextWindow ?? null : OBS_CAP,
     generatedAt: new Date().toISOString(),
     session: {
       sessionId: agg.sessionId,
+      provider: agg.provider ?? "claude",
+      usage: agg.usage,
       project: agg.project,
       ...(agg.cwd ? { cwd: agg.cwd } : {}),
       firstTs: agg.firstTs,
       lastTs: agg.lastTs,
       prompts: agg.prompts,
     },
-    nodes,
+    ...(agg.provider === "codex" ? { ...evidence,
+      coverage: { retainedLines: lines.length, totalEvents: agg.events, bounded: agg.events > lines.length } } : {}),
+    nodes: agg.provider === "codex" ? nodes.map(n => ({ ...n, cost: null })) : nodes,
     waste: {
       preTotal,
       observableTotal: obsTotal,

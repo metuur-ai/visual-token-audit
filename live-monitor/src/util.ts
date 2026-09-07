@@ -44,6 +44,7 @@ export function clip(s: string, n: number): string {
 export function usageFrom(u: any): Usage | undefined {
   if (!u || typeof u !== "object") return undefined;
   return {
+    ...(u.reasoning_output_tokens !== undefined ? { reasoning: num(u.reasoning_output_tokens) } : {}),
     input: num(u.input_tokens),
     output: num(u.output_tokens),
     cacheRead: num(u.cache_read_input_tokens),
@@ -60,6 +61,7 @@ export function addUsage(dst: Usage, src?: Usage) {
   dst.output += src.output;
   dst.cacheRead += src.cacheRead;
   dst.cacheWrite += src.cacheWrite;
+  if (src.reasoning !== undefined) dst.reasoning = (dst.reasoning ?? 0) + src.reasoning;
 }
 export function scaleUsage(u: Usage | undefined, f: number): Usage | undefined {
   if (!u) return undefined;

@@ -1,13 +1,13 @@
 # visual-token-audit
 
-Tools for seeing what your Claude Code sessions are actually doing — token spend,
+Tools for seeing what your Claude Code and Codex sessions are actually doing — token spend,
 tool calls, skill/command activity, and agent timelines — in real time.
 
 This repo contains two independent pieces:
 
 | Component | What it is | Path |
 |---|---|---|
-| **Live Monitor** | A zero-dependency local web app that tails your Claude Code transcripts and visualizes activity live. | [`live-monitor/`](live-monitor/) |
+| **Live Monitor** | A zero-dependency local web app that tails your Claude Code and Codex transcripts and visualizes activity live. | [`live-monitor/`](live-monitor/) |
 | **harness-audit** | A skill that audits and refactors your Claude "harness" (CLAUDE.md, rules, skills, commands, agents, hooks, memory). | [`skills/harness-audit/`](skills/harness-audit/) |
 
 ---
@@ -15,8 +15,8 @@ This repo contains two independent pieces:
 ## Live Monitor
 
 A local **HTTP + Server-Sent Events** server that watches
-`~/.claude/projects/**/*.jsonl` (the JSONL transcript Claude Code writes per
-session), parses each appended line incrementally, and serves three live views on
+`~/.claude/projects/**/*.jsonl` and `$CODEX_HOME/sessions/**/*.jsonl`
+(including `$CODEX_HOME/archived_sessions/`), parses each appended line incrementally, and serves three live views on
 `http://127.0.0.1:8722`. Zero npm dependencies; runs on **Node ≥18** or **Bun**.
 
 ### Quick start
@@ -90,6 +90,8 @@ rescan as a macOS fallback.
 | Env var | Default | Meaning |
 |---|---|---|
 | `MONITOR_PORT` | `8722` | Port to listen on (host is always `127.0.0.1`). |
+| `CODEX_HOME` | `~/.codex` | Codex data directory; reads `sessions/` and `archived_sessions/`. |
+| `CLAUDE_PROJECTS_DIR` | `~/.claude/projects` | Claude transcript directory. |
 
 ```sh
 MONITOR_PORT=9000 claude-live-monitor
@@ -156,8 +158,7 @@ See [`skills/harness-audit/SKILL.md`](skills/harness-audit/SKILL.md).
 ## Requirements
 
 - **Node ≥18** (for `npx` / global install) or **Bun** (for source dev).
-- macOS or Linux. The monitor reads `~/.claude/projects/` — it does nothing useful
-  without Claude Code session transcripts present.
+- macOS or Linux. The monitor needs local Claude Code or Codex session transcripts. Either provider can be absent.
 
 ## License
 
