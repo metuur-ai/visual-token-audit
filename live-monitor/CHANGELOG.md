@@ -1,5 +1,19 @@
 # Changelog
 
+Releases use date-based versions: `YYYY.MMDD.N`, where `N` starts at 1 and
+increments for each additional release on the same day. Example: the second
+release on 2026-09-10 is `2026.910.2`. Months and days are not zero-padded,
+because npm rejects leading zeros in a version part. Releases up to and
+including `0.3.0` used incremental semver.
+
+## 2026.910.1 — 2026-09-10
+
+### Changed
+
+- Version numbers are now date-based (`YYYY.MMDD.N`) instead of incremental
+  semver. This changes only how releases are numbered; the package contents and
+  commands are unchanged.
+
 ## 0.3.0 — 2026-09-07
 
 ### Added

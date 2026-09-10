@@ -4,7 +4,9 @@ A zero-dependency [Bun](https://bun.sh) server that tails your Claude Code and C
 session transcripts in real time and exposes them over HTTP + Server-Sent Events
 for the dashboard UI.
 
-See the [changelog](CHANGELOG.md) for release notes, including version 0.3.0.
+See the [changelog](CHANGELOG.md) for release notes, including version
+2026.910.1. Versions are date-based: `YYYY.MMDD.N`, where `N` counts releases
+made on the same day.
 
 ## Install Globally
 
