@@ -6,6 +6,23 @@ release on 2026-09-10 is `2026.910.2`. Months and days are not zero-padded,
 because npm rejects leading zeros in a version part. Releases up to and
 including `0.3.0` used incremental semver.
 
+## 2026.913.1 — 2026-09-13
+
+### Fixed
+
+- `claude-live-monitor start` no longer fails on machines with a large recent
+  transcript corpus. The collector bound its port only after the first
+  transcript scan had finished, so the port stayed connection-refused for the
+  whole scan; the CLI gave up after about 30 seconds and killed a service that
+  was starting normally. The port is now bound before the scan begins, so `start`
+  succeeds regardless of how long the scan takes.
+
+### Notes
+
+- On a large recent corpus, `start` can still take a while to return, because
+  the first scan runs to completion before the command reports success. The
+  service is reachable at its URL as soon as it is bound.
+
 ## 2026.910.1 — 2026-09-10
 
 ### Changed
