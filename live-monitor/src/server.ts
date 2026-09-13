@@ -38,14 +38,15 @@ function startServer(opts: {
   port: number;
   fetch: FetchHandler;
   error?: (e: unknown) => Response;
-}): { port: number } {
+}): { port: number; ready: Promise<void> } {
   const bun = (globalThis as { Bun?: { serve: (o: unknown) => { port: number } } }).Bun;
   if (bun) {
     // Bun.serve defaults to a 10s idle timeout, which kills the /events SSE
     // connection long before its first KEEPALIVE_MS (25s) heartbeat can reset the
     // clock. Keep this comfortably above KEEPALIVE_MS so the heartbeat is what
     // holds the socket open, while still reaping genuinely dead clients.
-    return bun.serve({ ...opts, idleTimeout: SSE_IDLE_TIMEOUT_S });
+    // Bun.serve binds before it returns, so the socket is already accepting.
+    return { port: bun.serve({ ...opts, idleTimeout: SSE_IDLE_TIMEOUT_S }).port, ready: Promise.resolve() };
   }
   const nodeServer = createServer(async (req, res) => {
     try {
@@ -87,13 +88,20 @@ function startServer(opts: {
       }
     }
   });
+  // node:http resolves the hostname asynchronously, so the socket is NOT bound
+  // when listen() returns -- it binds on a later tick. Callers must await `ready`
+  // before doing synchronous startup work, or the port stays refused meanwhile.
+  const ready = new Promise<void>((resolve, reject) => {
+    nodeServer.once("listening", () => resolve());
+    nodeServer.once("error", reject);
+  });
   nodeServer.listen(opts.port, opts.hostname);
-  return { port: opts.port };
+  return { port: opts.port, ready };
 }
 
 // Build and start the HTTP+SSE server. publicDir is resolved by the entry
 // module (collector.ts) so this module stays free of import.meta.
-export function startHttpServer(opts: { host: string; port: number; publicDir: string }): { port: number } {
+export function startHttpServer(opts: { host: string; port: number; publicDir: string }): { port: number; ready: Promise<void> } {
   const { host, port, publicDir } = opts;
 
   function serveStatic(file: string, contentType: string): Response {

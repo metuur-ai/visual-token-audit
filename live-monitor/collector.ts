@@ -34,6 +34,12 @@ const server = startHttpServer({ host: HOST, port: PORT, publicDir: PUBLIC_DIR }
 // ----------------------------------------------------------------------------
 // Boot
 // ----------------------------------------------------------------------------
+// Bind the port BEFORE the (synchronous, potentially multi-second) first scan.
+// Under node:http the listen() bind lands on a later tick, so scanning first
+// blocks the event loop and leaves the port refused -- which makes
+// `claude-live-monitor start` time out and kill a perfectly healthy service.
+await server.ready;
+
 try {
   firstScan();
 } catch (e) {
