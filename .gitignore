@@ -7,3 +7,4 @@ coverage/
 .devlocal/
 .playwright-mcp/
 graphify-out/
+metuur-claude-live-monitor-*.tgz
