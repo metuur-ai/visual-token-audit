@@ -1,12 +1,18 @@
 # Changelog
 
-Releases use date-based versions: `YYYY.MMDD.N`, where `N` starts at 1 and
-increments for each additional release on the same day. Example: the second
-release on 2026-09-10 is `2026.910.2`. Months and days are not zero-padded,
-because npm rejects leading zeros in a version part. Releases up to and
-including `0.3.0` used incremental semver.
+Releases use date-based versions: `YYYY.MM.DD-{patch}`, where `YYYY.MM.DD` is
+the release date and `{patch}` starts at 1, incrementing for each additional
+release on the same day. Example: the second release on 2026-09-13 is
+`2026.9.13-2`. Months and days are not zero-padded, because npm rejects leading
+zeros in a version part. Earlier releases used other schemes: `YYYY.MMDD.N` for
+`2026.910.1`, and incremental semver up to and including `0.3.0`.
 
-## 2026.913.1 — 2026-09-13
+Because the `-{patch}` suffix is a semver prerelease identifier, these versions
+are excluded from `^` and `*` ranges; install them by exact version or by the
+`latest` dist-tag. They also sort below `2026.910.1` until the year rolls over,
+so `npm update` will not offer them to anyone already on `2026.910.1`.
+
+## 2026.9.13-1 — 2026-09-13
 
 ### Fixed
 
@@ -27,8 +33,8 @@ including `0.3.0` used incremental semver.
 
 ### Changed
 
-- Version numbers are now date-based (`YYYY.MMDD.N`) instead of incremental
-  semver. This changes only how releases are numbered; the package contents and
+- Version numbers are now date-based (`YYYY.MMDD.N`; superseded by
+  `YYYY.MM.DD-{patch}` from 2026-09-13) instead of incremental semver. This changes only how releases are numbered; the package contents and
   commands are unchanged.
 
 ## 0.3.0 — 2026-09-07
