@@ -1,3 +1,4 @@
+const APP_VERSION = document.querySelector('meta[name="app-version"]')?.content;
 /* projects.js — project-centric index: sessions grouped by project directory,
    sorted most-recent-first (Preact + htm, no build step).
    Data: GET /api/projects → { projects: ProjectRecord[], startedAt }.
@@ -137,7 +138,7 @@ function App() {
       <button class=${days === 30 ? 'on' : ''} onClick=${() => setDays(30)}>30d</button>
       <button class=${days === 60 ? 'on' : ''} onClick=${() => setDays(60)}>60d</button>
     </div>
-    <span class="live ${err && !data ? 'err' : ''}">${err ? 'stale' : 'auto 60s'}</span>
+    <div class="app-status"><span class="app-version">${APP_VERSION ? `v${APP_VERSION}` : 'Version unavailable'}</span><span class="live ${err && !data ? 'err' : ''}">${err ? 'stale' : 'auto 60s'}</span></div>
   </header>`;
 
   if (err && !data) return html`${top}<main><div class="state">

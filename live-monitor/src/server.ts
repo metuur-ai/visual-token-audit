@@ -18,6 +18,12 @@ import { buildStatsJSON } from "./stats.ts";
 import { MonitorEvent } from "./types.ts";
 import { log } from "./util.ts";
 
+// Both src/server.ts and the built dist/collector.js sit one directory below
+// the installed package.json. Read the package version, not a copied UI value.
+const appVersion: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
+const versionMeta = `<meta name="app-version" content="${appVersion.replace(/[&<>"']/g,
+  char => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!)}">`;
+
 function snapshotJSON(): string {
   return JSON.stringify({
     events: ring,
@@ -111,7 +117,9 @@ export function startHttpServer(opts: { host: string; port: number; publicDir: s
         // UI assets are small (<40 KB); read into memory rather than depend on a
         // runtime-specific file-stream helper. Works identically on Bun and Node.
         const bytes = readFileSync(path);
-        return new Response(bytes, { headers: { "Content-Type": contentType } });
+        const body = contentType.startsWith("text/html")
+          ? bytes.toString("utf8").replace("</head>", `${versionMeta}\n</head>`) : bytes;
+        return new Response(body, { headers: { "Content-Type": contentType } });
       }
     } catch (e) {
       log("static serve error", path, e);

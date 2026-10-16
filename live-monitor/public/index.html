@@ -492,6 +492,9 @@
       visibility: collapse; width: 0;
     }
   }
+
+.app-status{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;gap:2px;flex-shrink:0}
+.app-version{font-size:10px;line-height:1.2;color:var(--dim);white-space:nowrap}
 </style>
 </head>
 <body>
@@ -510,8 +513,10 @@
   <div class="stat"><span class="stat-label">Output</span><span class="stat-value" id="t-output">—</span></div>
   <div class="stat"><span class="stat-label">Cache R</span><span class="stat-value" id="t-cr">—</span></div>
   <div class="stat"><span class="stat-label">Cache W</span><span class="stat-value" id="t-cw">—</span></div>
-  <span class="conn-dot" id="conn-dot"></span>
-  <span class="conn-label" id="conn-label">connecting…</span>
+  <div class="app-status">
+    <span class="app-version" id="app-version"></span>
+    <span style="display:flex;align-items:center;gap:6px"><span class="conn-dot" id="conn-dot"></span><span class="conn-label" id="conn-label">connecting…</span></span>
+  </div>
 </div>
 
 <div id="main">

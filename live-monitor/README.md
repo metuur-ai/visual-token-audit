@@ -44,6 +44,19 @@ claude-live-monitor stop
 Both Claude Code and Codex sessions are monitored. `codex-live-monitor` remains an
 alias with the same commands.
 
+Show the installed version or command help without starting the monitor:
+
+```sh
+claude-live-monitor version   # also --version or -v
+claude-live-monitor help      # also --help or -h
+codex-live-monitor version
+codex-live-monitor help
+```
+
+From a checkout, use `node live-monitor/bin/cli.js version` or
+`node live-monitor/bin/cli.js help` at the repository root. These commands work
+without a build and from any working directory when given the CLI's path.
+
 To install the current checkout globally before these changes are published:
 
 ```sh

@@ -1,3 +1,4 @@
+const APP_VERSION = document.querySelector('meta[name="app-version"]')?.content;
 import { CodexRegistry } from "./codex-observe.js";
 /* observe.js — Session Observability UI (Preact + htm, no build step).
    Data: GET /api/snapshot (session picker), GET /api/observe/<id> (entity model, spec §2). */
@@ -888,7 +889,7 @@ function App() {
     <span class="tstat"><span class="l">${m?.session?.provider === 'codex' ? 'recorded context' : 'preloaded'}</span><span class="v num">${m ? (m.session?.provider === 'codex' ? '~' + fmt(sum(m.recordedContext, r => r.tokens)) : fmt(preTot)) : '—'}</span></span>
     <span class="tstat"><span class="l">never used</span><span class="v warn num">${w && m?.session?.provider !== 'codex' ? fmt(w.wasted) + ' (' + (w.observableTotal ? Math.round(w.wasted / w.observableTotal * 100) : 0) + '%)' : '—'}</span></span>
     <span class="tstat"><span class="l">cost</span><span class="v num">${R ? estimate(R.cost) : '—'}</span></span>
-    <span class="live ${stale || (err && !m) ? 'err' : ''}">${stale ? 'stale' : 'live'}</span>
+    <div class="app-status"><span class="app-version">${APP_VERSION ? `v${APP_VERSION}` : 'Version unavailable'}</span><span class="live ${stale || (err && !m) ? 'err' : ''}">${stale ? 'stale' : 'live'}</span></div>
   </div>`;
 
   if (!m) {

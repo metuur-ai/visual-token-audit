@@ -1,3 +1,4 @@
+const APP_VERSION = document.querySelector('meta[name="app-version"]')?.content;
 /* stats.js — usage stats over a 14/30-day window (Preact + htm, no build step).
    Data: GET /api/stats?days=N → { days, generatedAt, totals, byDay[], skills[],
    commands[], rules[], agents[], tools[], mcp[], plugins[], models[] } */
@@ -165,7 +166,7 @@ function App() {
       <button class=${days === 14 ? 'on' : ''} onClick=${() => setDays(14)}>14d</button>
       <button class=${days === 30 ? 'on' : ''} onClick=${() => setDays(30)}>30d</button>
     </div>
-    <span class="live ${err && !data ? 'err' : ''}">${err ? 'stale' : 'auto 60s'}</span>
+    <div class="app-status"><span class="app-version">${APP_VERSION ? `v${APP_VERSION}` : 'Version unavailable'}</span><span class="live ${err && !data ? 'err' : ''}">${err ? 'stale' : 'auto 60s'}</span></div>
   </header>`;
 
   if (err && !data) return html`${top}<main><div class="state">

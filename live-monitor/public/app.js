@@ -1,3 +1,5 @@
+const appVersion = document.querySelector('meta[name="app-version"]')?.content;
+document.getElementById('app-version').textContent = appVersion ? `v${appVersion}` : 'Version unavailable';
 // Live Session Monitor — app.js  (v2)
 // Talks to: GET /api/snapshot         → { events, sessions, startedAt }
 //           GET /api/session/:id      → SessionDetail (v2)
