@@ -1,4 +1,4 @@
-import { codexResources, nestedToolRequests } from "./codex-evidence.ts";
+import { codexResources, nestedToolRequests, codexOutputText, codexSkillDocuments } from "./codex-evidence.ts";
 // Adapt Codex rollouts to the collector's internal transcript shape. One adapter
 // per file: metadata and cumulative counters must survive incremental reads.
 // Source: openai/codex codex-rs/protocol/src/protocol.rs (RolloutItem).
@@ -10,6 +10,8 @@ export class CodexAdapter {
   private model = "codex-unknown";
   private totals: number[] = [0, 0, 0, 0, 0];
   private window?: number;
+  private snapshot = "";
+  private usageModel?: string;
 
   constructor(fallbackId: string) { this.sessionId = `codex:${fallbackId}`; }
 
@@ -18,6 +20,13 @@ export class CodexAdapter {
     try { o = JSON.parse(raw); } catch { return null; }
     const p = o?.payload;
     if (!p || typeof p !== "object") return null;
+    const record = (type: string, message: any, extra: object = {}) => JSON.stringify({
+      type, timestamp: o.timestamp, sessionId: this.sessionId,
+      cwd: this.cwd, provider: "codex", parentSessionId: this.parentSessionId, agentName: this.agentName, message, ...extra,
+    });
+    const evidence = (type: string, data: object, extra: object = {}) => record("system", { model: this.model }, {
+      hasOutput: true, codexEvent: { type, data }, ...extra,
+    });
     if (o.type === "session_meta") {
       if (typeof p.id === "string") this.sessionId = `codex:${p.id}`;
       if (typeof p.cwd === "string") this.cwd = p.cwd;
@@ -29,44 +38,64 @@ export class CodexAdapter {
       this.agentName = spawn?.agent_path ?? spawn?.agent_nickname ?? spawn?.agent_role
         ?? (typeof p.source?.subagent?.other === "string" ? p.source.subagent.other : undefined);
       const base = typeof p.base_instructions === "string" ? p.base_instructions : p.base_instructions?.text;
-      return typeof base === "string" ? JSON.stringify({ type: "system", timestamp: o.timestamp,
-        sessionId: this.sessionId, cwd: this.cwd, provider: "codex", parentSessionId: this.parentSessionId, agentName: this.agentName, hasOutput: true,
-        codexResources: codexResources(base, "Base instructions") }) : null;
+      return evidence("session_meta", { originator: p.originator, source: p.source, cliVersion: p.cli_version }, {
+        codexResources: typeof base === "string" ? codexResources(base, "Base instructions") : [],
+      });
     }
     if (o.type === "turn_context") {
       if (typeof p.cwd === "string") this.cwd = p.cwd;
-      if (typeof p.model === "string") this.model = p.model;
-      return null;
+      if (typeof p.model === "string") {
+        if (p.model !== this.model) this.window = undefined;
+        this.model = p.model;
+      }
+      return evidence("turn_context", { turnId: p.turn_id, model: this.model,
+        effort: p.effort ?? p.reasoning_effort, approvalPolicy: p.approval_policy, sandboxPolicy: p.sandbox_policy });
     }
-    const record = (type: string, message: any, extra: object = {}) => JSON.stringify({
-      type, timestamp: o.timestamp, sessionId: this.sessionId,
-      cwd: this.cwd, provider: "codex", parentSessionId: this.parentSessionId, agentName: this.agentName, message, ...extra,
-    });
+    if (o.type === "compacted" || (o.type === "event_msg" && p.type === "context_compacted"))
+      return evidence("compaction", { source: o.type === "compacted" ? o.type : p.type }, {
+        detailText: typeof p.message === "string" ? p.message.slice(0, 6000) : undefined,
+      });
     if (o.type === "event_msg" && p.type === "token_count") {
       const info = p.info;
       if (Number.isFinite(info?.model_context_window) && info.model_context_window > 0)
         this.window = info.model_context_window;
+      const last = info?.last_token_usage;
+      const context = {
+        ...(Number.isFinite(last?.input_tokens) && last.input_tokens >= 0 ? { contextTokens: last.input_tokens } : {}),
+        ...(this.window ? { contextWindow: this.window } : {}),
+      };
+      const snapshot = JSON.stringify([this.model, context, p.rate_limits]);
+      const changed = snapshot !== this.snapshot;
+      this.snapshot = snapshot;
+      const tokenEvidence = { rateLimits: p.rate_limits };
       // Rate-limit-only updates repeat last_token_usage. Use cumulative deltas,
       // never sum last_token_usage (nor token_usage_record, a duplicate stream).
       const total = info?.total_token_usage;
-      if (!total || !Number.isFinite(total.input_tokens) || !Number.isFinite(total.output_tokens)) return null;
+      if (!total || !Number.isFinite(total.input_tokens) || !Number.isFinite(total.output_tokens))
+        return changed && (Object.keys(context).length || p.rate_limits) ? evidence("token_count", tokenEvidence, context) : null;
       const values = counters(total);
       const reset = values[0] < this.totals[0] || values[3] < this.totals[3];
       const delta = values.map((v, i) => Math.max(0, v - this.totals[i]));
       // A counter reset establishes a new baseline, without replaying old usage.
       this.totals = values;
-      if (reset || !delta.some(Boolean)) return null;
+      if (reset) return evidence("token_count", { ...tokenEvidence, counterReset: true }, context);
+      // A rate-limit refresh can repeat the previous model's last request after
+      // a new turn_context. Without new usage, do not relabel it as a new-model request.
+      if (!delta.some(Boolean)) {
+        const staleModel = this.usageModel && this.usageModel !== this.model;
+        if (staleModel) this.window = undefined;
+        return changed ? evidence("token_count", tokenEvidence, staleModel ? {} : context) : null;
+      }
+      this.usageModel = this.model;
       const [input, cached, write, output, reasoning] = delta;
       const cacheRead = Math.min(input, cached);
       const cacheWrite = Math.min(input - cacheRead, write);
-      const last = info.last_token_usage;
       return record("assistant", { model: this.model, content: [], usage: {
         input_tokens: input - cacheRead - cacheWrite,
         cache_read_input_tokens: cacheRead, cache_creation_input_tokens: cacheWrite,
         output_tokens: output, reasoning_output_tokens: Math.min(output, reasoning),
       } }, {
-        ...(Number.isFinite(last?.input_tokens) ? { contextTokens: Math.max(0, last.input_tokens) } : {}),
-        ...(this.window ? { contextWindow: this.window } : {}),
+        ...context, codexEvent: { type: "token_count", data: tokenEvidence },
       });
     }
     if (o.type !== "response_item") return null;
@@ -90,8 +119,10 @@ export class CodexAdapter {
       return record("assistant", { model: this.model, content: [{ type: "tool_use", id: p.call_id, name, input }] }, { nestedToolRequests: nestedToolRequests(p.input ?? p.arguments) });
     }
     if (p.type === "function_call_output" || p.type === "custom_tool_call_output") {
-      const content = typeof p.output === "string" ? p.output : JSON.stringify(p.output ?? "");
-      return record("user", { content: [{ type: "tool_result", tool_use_id: p.call_id, content }] });
+      const content = codexOutputText(p.output);
+      return record("user", { content: [{ type: "tool_result", tool_use_id: p.call_id, content }] }, {
+        codexSkillDocuments: codexSkillDocuments(content),
+      });
     }
     return null;
   }

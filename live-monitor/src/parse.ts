@@ -85,6 +85,8 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
       text: ev.text,
       detailText: o.detailText,
       codexResources: o.codexResources,
+      codexSkillDocuments: o.codexSkillDocuments,
+      codexEvent: o.codexEvent,
       nestedToolRequests: o.nestedToolRequests,
       reminders: [],
       toolUses: [],
@@ -253,7 +255,8 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
       let text: string | undefined;
       if (typeof o.hookAdditionalContext === "string") text = snippet(o.hookAdditionalContext);
       else if (typeof o.subtype === "string") text = snippet(o.subtype);
-      return mk({ ts, sessionId, project, kind: "system", ...(text ? { text } : {}) }, { reminders: evs });
+      return mk({ ts, sessionId, project, kind: "system", ...(text ? { text } : {}),
+        ...(o.provider === "codex" && typeof msg?.model === "string" ? { model: msg.model } : {}) }, { reminders: evs });
     }
     return null;
   }

@@ -10,6 +10,7 @@
 
 import { FULL_LABEL_LEN, LABEL_LEN, TREE_MAX_NODES } from "./config.ts";
 import { costUSD, priceFor } from "./cost.ts";
+import { codexApiEstimate, codexContext } from "./codex-analysis.ts";
 import { sessionLines, sessions, subagentMeta } from "./state.ts";
 import { contextWindowForModel } from "./startup-inventory.ts";
 import { AgentDispatch, AutoLoad, CountMap, InvokedLoad, TreeNode, bump, chainDurationMs, chainModel, chainSubtree, chainToolCount, chainUsage, claimChain, classifyReminder, collectSidechainChains, countNodes, inputSummary, mcpServer, promptOf, ruleTokenEstimate, toolNodeKind } from "./tree.ts";
@@ -339,6 +340,11 @@ export function buildSessionDetail(sessionId: string): string | null {
           },
         }
       : {}),
+    ...(agg.provider === "codex" ? (() => {
+      const context = codexContext(lines);
+      return { context: context.peak ? { ...context.peak, lastTokens: context.latest!.tokens } : null,
+        requestContext: context, apiEquivalentCost: codexApiEstimate(agg.usageByModel) };
+    })() : {}),
     cost: agg.provider === "codex" ? { totalUSD: null, byModel: [], byCategory: null, reason: "Codex billing is not recorded in local rollouts" } : { totalUSD, byModel, byCategory },
     dispatches,
     firstTs: agg.firstTs,

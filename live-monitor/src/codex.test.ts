@@ -49,8 +49,54 @@ test("metadata survives across appends and model switches", () => {
 test("counter resets establish a baseline then count new increments", () => {
   const a = setup();
   parse(a, count(usage(1000, 700, 100)));
-  expect(parse(a, count(usage(0, 0, 0)))).toBeNull();
+  const reset = parse(a, count(usage(0, 0, 0)))!;
+  expect(reset.ev.usage).toBeUndefined();
+  expect(reset.line.codexEvent?.data.counterReset).toBe(true);
   expect(parse(a, count(usage(100, 0, 20)))!.ev.usage?.input).toBe(100);
+});
+
+test("metadata, turn settings and compactions survive without usage or base instructions", () => {
+  const a = new CodexAdapter("fallback");
+  const meta = parse(a, row("session_meta", { id: "child", cwd: "/tmp/work", parent_thread_id: "parent", originator: "codex_cli_rs", source: "cli" }))!;
+  expect(meta.ev).toMatchObject({ kind: "system", sessionId: "codex:child", parentSessionId: "codex:parent" });
+  expect(meta.line.codexEvent).toMatchObject({ type: "session_meta", data: { source: "cli", originator: "codex_cli_rs" } });
+  const context = parse(a, row("turn_context", { model: "model-a", effort: "high", turn_id: "t1", approval_policy: "never" }))!;
+  expect(context.line).toMatchObject({ model: "model-a", codexEvent: { type: "turn_context", data: { model: "model-a", effort: "high", turnId: "t1" } } });
+  for (const [type, payload] of [["compacted", { message: "Summary" }], ["event_msg", { type: "context_compacted" }]] as const) {
+    expect(parse(a, row(type, payload))!.line.codexEvent?.type).toBe("compaction");
+  }
+});
+
+test("rate-only and last-only updates preserve evidence without inventing usage", () => {
+  const a = setup();
+  const limits = { primary: { used_percent: 40 } };
+  const rateOnly = row("event_msg", { type: "token_count", info: null, rate_limits: limits });
+  const parsed = parse(a, rateOnly)!;
+  expect(parsed.ev.usage).toBeUndefined();
+  expect(parsed.line.codexEvent?.data.rateLimits).toEqual(limits);
+  expect(parse(a, rateOnly)).toBeNull();
+  const lastOnly = row("event_msg", { type: "token_count", info: { last_token_usage: usage(300, 100, 20), model_context_window: 8000 } });
+  expect(parse(a, lastOnly)!.ev).toMatchObject({ kind: "system", contextTokens: 300, contextWindow: 8000 });
+  expect(parse(a, lastOnly)).toBeNull();
+  a.convert(row("turn_context", { model: "model-b" }));
+  const next = parse(a, row("event_msg", { type: "token_count", info: { total_token_usage: usage(500, 100, 30), last_token_usage: usage(200, 0, 10) } }))!;
+  expect(next.ev.contextWindow).toBeUndefined();
+  expect(next.ev.model).toBe("model-b");
+});
+
+test("a repeated total after a model switch does not relabel the previous request", () => {
+  const a = setup();
+  const previous = count(usage(1000, 700, 100));
+  parse(a, previous);
+  a.convert(row("turn_context", { model: "model-b" }));
+  const refresh = parse(a, previous)!;
+  expect(refresh.ev.usage).toBeUndefined();
+  expect(refresh.line.contextTokens).toBeUndefined();
+  const next = parse(a, row("event_msg", { type: "token_count", info: {
+    total_token_usage: usage(1200, 700, 120), last_token_usage: usage(200, 0, 20),
+  } }))!;
+  expect(next.line.contextTokens).toBe(200);
+  expect(next.line.contextWindow).toBeUndefined();
 });
 
 test("response messages and tools become linked monitor events without duplicate prompts", () => {

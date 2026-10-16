@@ -51,6 +51,7 @@ export interface SessionAgg {
   events: number;
   models: Record<string, number>;
   usage: Usage;
+  usageByModel?: Record<string, Usage>; // Codex totals retained beyond the bounded line store
   tools: Record<string, number>;
   skills: Record<string, number>;
   commands: Record<string, number>; // v2
@@ -66,6 +67,8 @@ export interface ToolUseBlock {
   input: any;
 }
 export interface SessionLine {
+  codexSkillDocuments?: string[]; // skill frontmatter observed before result-preview clipping
+  codexEvent?: { type: string; data: Record<string, unknown> };
   codexResources?: import("./codex-evidence.ts").CodexResource[];
   nestedToolRequests?: string[];
   detailText?: string;

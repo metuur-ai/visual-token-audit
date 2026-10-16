@@ -20,6 +20,7 @@
 
 import { LABEL_LEN } from "./config.ts";
 import { costUSD } from "./cost.ts";
+import { codexApiEstimate, codexContext } from "./codex-analysis.ts";
 import {
   StartupInventory,
   PluginCounts,
@@ -113,6 +114,8 @@ export interface ObsNode {
   evidence?: ReturnType<typeof codexNodeEvidence>;
   usage?: import("./types.ts").Usage;
   contextWindow?: number;
+  requestContext?: ReturnType<typeof codexContext>;
+  apiEquivalentCost?: ReturnType<typeof codexApiEstimate>;
   selfTok: number;
   cost: number;
   ctx: number;
@@ -470,13 +473,22 @@ export function codexNodeEvidence(main: SessionLine[]) {
         authorization: String(decision.user_authorization ?? "unknown"), rationale: decision.rationale, request });
     } catch { /* Ordinary assistant prose is not a structured review decision. */ }
   }
-  const codexResults = new Map(main.filter(l => l.toolResultFor).map(l => [l.toolResultFor!, l]));
+  const codexResults = new Map<string, SessionLine[]>();
+  for (const line of main) {
+    if (!line.toolResultFor) continue;
+    const results = codexResults.get(line.toolResultFor) ?? [];
+    results.push(line);
+    codexResults.set(line.toolResultFor, results);
+  }
   const callDetails = main.flatMap(ln => ln.toolUses.map(tu => {
-    const result = codexResults.get(tu.id);
+    const results = codexResults.get(tu.id) ?? [];
+    const result = results.at(-1);
     const input = typeof tu.input === "string" ? tu.input : JSON.stringify(tu.input ?? {});
     return { id: tu.id, name: tu.name, at: ln.ts, input: input.slice(0, 12000),
-      inputTruncated: input.length > 12000, output: result?.detailText ?? result?.text,
-      resultBytes: result?.resultBytes, status: result ? "result recorded" : "no result retained",
+      inputTruncated: input.length > 12000, output: results.map(r => r.detailText ?? r.text ?? "").join("").slice(0, 6000),
+      resultBytes: results.reduce((n, r) => n + (r.resultBytes ?? 0), 0), resultCount: results.length,
+      skillDocuments: [...new Set(results.flatMap(r => r.codexSkillDocuments ?? []))],
+      status: result ? "result recorded" : "no result retained",
       durationMs: result ? Math.max(0, Date.parse(result.ts) - Date.parse(ln.ts)) : undefined,
       nestedRequests: ln.nestedToolRequests ?? [] };
   }));
@@ -484,13 +496,30 @@ export function codexNodeEvidence(main: SessionLine[]) {
   const nested = new Map<string, number>();
   for (const ln of main) {
     for (const resource of ln.codexResources ?? []) {
-      const key = resource.kind + "|" + resource.name;
+      const key = resource.kind + "|" + resource.name + "|" + (resource.path ?? "");
       const previous = recorded.get(key);
       if (!previous || previous.tokens < resource.tokens) recorded.set(key, resource);
     }
     for (const name of ln.nestedToolRequests ?? []) nested.set(name, (nested.get(name) ?? 0) + 1);
   }
-  return { reviews: reviews.slice(-200), recordedContext: [...recorded.values()], callDetails: callDetails.slice(-200), nestedToolRequests: [...nested].map(([name, count]) => ({ name, count })) };
+  const skillCalls = main.flatMap(line => line.toolUses).map(tool => ({
+    ...tool, source: typeof tool.input === "string" ? tool.input : JSON.stringify(tool.input ?? {}),
+  }));
+  const skillActivity = [...recorded.values()].filter(r => r.kind === "skill").map(resource => {
+    const references = skillCalls.filter(tool => resource.path && tool.source.includes(resource.path));
+    const reads = references.filter(tool => (codexResults.get(tool.id) ?? []).some(result =>
+      (result.codexSkillDocuments ?? []).some(name => name === resource.name || name === resource.name.split(":").at(-1))));
+    return { name: resource.name, path: resource.path,
+      status: reads.length ? "read" : references.length ? "referenced" : "advertised",
+      callIds: [...new Set(references.map(tool => tool.id))], readCallIds: [...new Set(reads.map(tool => tool.id))] };
+  });
+  return { reviews: reviews.slice(-200), recordedContext: [...recorded.values()], skillActivity, callDetails: callDetails.slice(-200),
+    sessionMetadata: main.find(l => l.codexEvent?.type === "session_meta")?.codexEvent?.data ?? null,
+    turnContexts: main.filter(l => l.codexEvent?.type === "turn_context").map(l => ({ at: l.ts, ...l.codexEvent!.data })),
+    compactions: main.filter(l => l.codexEvent?.type === "compaction").map(l => ({ at: l.ts, ...l.codexEvent!.data })),
+    rateLimits: [...main].reverse().find(l => l.codexEvent?.data.rateLimits != null)?.codexEvent?.data.rateLimits ?? null,
+    counterResets: main.filter(l => l.codexEvent?.data.counterReset).map(l => l.ts),
+    nestedToolRequests: [...nested].map(([name, count]) => ({ name, count })) };
 }
 
 export function buildObserveSnapshot(sessionId: string): string | null {
@@ -589,6 +618,7 @@ export function buildObserveSnapshot(sessionId: string): string | null {
   // ----- nodes -----
   const rootSelf = obsSelf(main);
   const rootModel = (() => {
+    if (agg.provider === "codex") return [...main].reverse().find(l => l.model && l.model !== "codex-unknown")?.model;
     let best = "";
     let bestN = 0;
     for (const [m, n] of Object.entries(agg.models)) if (n > bestN) { best = m; bestN = n; }
@@ -605,8 +635,9 @@ export function buildObserveSnapshot(sessionId: string): string | null {
     ...(rootSelf.dur !== undefined ? { dur: rootSelf.dur } : {}),
     selfTok: agg.provider === "codex" ? agg.usage.input + agg.usage.output + agg.usage.cacheRead + agg.usage.cacheWrite : rootSelf.selfTok,
     usage: agg.usage,
+    ...(agg.provider === "codex" ? { evidence, requestContext: codexContext(main), apiEquivalentCost: codexApiEstimate(agg.usageByModel) } : {}),
     cost: rootSelf.cost,
-    ctx: rootSelf.ctx,
+    ctx: agg.provider === "codex" ? codexContext(main).peak?.tokens ?? 0 : rootSelf.ctx,
     turns: rootSelf.turns,
     tools: rootSelf.tools,
     pre: rootPre,
@@ -624,14 +655,15 @@ export function buildObserveSnapshot(sessionId: string): string | null {
         visited.add(child.sessionId);
         const childLines = sessionLines.get(child.sessionId) ?? [];
         const metrics = obsSelf(childLines);
-        const model = Object.keys(child.models)[0];
+        const model = [...childLines].reverse().find(l => l.model && l.model !== "codex-unknown")?.model;
         nodes.push({ id: child.sessionId, type: "agent", name: child.agentName ?? child.sessionId,
           label: child.project, parentId: parent, model, start: child.firstTs,
           dur: Math.max(0, Date.parse(child.lastTs) - Date.parse(child.firstTs)),
           selfTok: child.usage.input + child.usage.output + child.usage.cacheRead + child.usage.cacheWrite,
           evidence: codexNodeEvidence(childLines),
+          requestContext: codexContext(childLines), apiEquivalentCost: codexApiEstimate(child.usageByModel),
           usage: child.usage, contextWindow: [...childLines].reverse().find(l => l.contextWindow)?.contextWindow,
-          cost: 0, ctx: metrics.ctx, turns: metrics.turns, tools: child.tools, pre: [],
+          cost: 0, ctx: codexContext(childLines).peak?.tokens ?? 0, turns: metrics.turns, tools: child.tools, pre: [],
           dyn: obsDyn(childLines, new Map()) });
         addChildren(child.sessionId, depth + 1);
       }

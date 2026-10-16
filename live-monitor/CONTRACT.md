@@ -222,3 +222,45 @@ rollout metadata. Observe links collected descendants (depth <=4, bounded tree),
 keeps root `selfTok` exclusive of child usage, and invalidates cached trees when
 Codex child activity changes. Child nodes expose their own `usage` and reported
 `contextWindow` when present.
+
+Codex evidence also includes `sessionMetadata`, `turnContexts`, `compactions`,
+`rateLimits` (latest recorded value or null), and `counterResets` (timestamps).
+Metadata and turn/compaction records can produce system events without usage.
+Rate-only and last-request-only updates preserve evidence without adding usage;
+identical consecutive snapshots are deduplicated. A reset establishes a baseline
+without replaying the reset record. Two different compaction event types are
+retained as records, not asserted to be distinct compaction operations.
+
+Each Codex node has its own `evidence` and `requestContext: { latest, peak }`.
+Each non-null request measurement contains `{ tokens, window, model?, ts }`;
+`window` is null when unknown. Peaks retain the window of that request.
+Detail also exposes `requestContext`; its legacy `context` pairs the peak with
+that peak's capacity, with `lastTokens` for the latest measurement. Codex node
+`turns` remains a count of usage increments for compatibility, not user turns.
+
+`recordedContext` resources add `evidence: "advertised" | "recorded instructions"`.
+Declared skill root aliases are resolved from the recorded catalog only. The
+registry shows advertised-only skills and treats tool-call references separately.
+Resource deduplication includes path. Neither a path reference nor a plugin
+namespace proves invocation. `callDetails.resultCount` counts retained result
+chunks sharing the call ID; previews combine chunks up to 6,000 characters and
+`resultBytes` sums their byte sizes.
+
+`skillActivity` classifies each recorded skill by name and path as `read`,
+`referenced`, or `advertised`, with `callIds` and `readCallIds`. `read` requires
+both a path reference in a call and matching skill frontmatter in its associated
+result. Known nested exec-result containers are decoded and skill names extracted
+before clipping result previews. This is evidence that instructions were read,
+not that every instruction was followed. Classification uses all retained calls,
+even when a call falls outside the latest-200 preview list, and is scoped to each
+session/child. The Codex registry defaults to Used (`read`) and offers Referenced,
+Available only and All filters in an internally scrolling list.
+
+Codex nodes and detail expose `apiEquivalentCost`, separate from billed `cost`:
+`{ label, rateSource, billing, totalUSD, knownUSD, byModel }`. Exact model rates
+come from `CODEX_API_PRICING_JSON` (`input`, `cachedInput`, `output`, USD/million).
+`totalUSD` is null without complete valid pricing; `knownUSD` is the priced
+subtotal. `byModel` contains usage, rates and nullable estimates. Explicit cache
+write counters are unpriced by this three-rate configuration. Reasoning is never
+charged separately. `SessionAgg.usageByModel` retains Codex usage attribution
+when older evidence lines are evicted. Existing billed cost fields remain null.

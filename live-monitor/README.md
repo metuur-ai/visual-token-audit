@@ -242,17 +242,50 @@ historical readers. Codex session IDs have a `codex:` prefix to avoid collisions
 - `usage.reasoning` is a subset of output, displayed separately in Codex Observe
   and session detail. It is never added again to total usage.
 - Context uses the last request's input count and the capacity reported by Codex.
-  It does not use the cumulative session input as context occupancy.
+  Latest and peak measurements retain their own model and capacity, including
+  across model changes. These are request input measurements, not exact live
+  occupancy. Usage increments are not user-turn counts.
 - Codex billed cost and Claude-specific startup inventory estimates are
   unavailable. Mixed Stats reports `cost: null`, with the Claude estimate in
   `knownCost` and the unpriced Codex token count in `unpricedTokens`.
 - Codex child rollouts with `source.subagent.thread_spawn.parent_thread_id`
-  (or `spawn.parent_thread_id`) appear in the parent execution tree. Selecting a child
+  (or `spawn.parent_thread_id`, or top-level `parent_thread_id`) appear in the parent execution tree. Selecting a child
   shows its details within the parent session tree. Independent sessions remain separate.
 - Archived rollouts contribute to history; moving a watched rollout into the
   archive preserves its counters. Historical Codex session links load on demand.
 - Only local rollout data is monitored. Account subscription limits and cloud
   sessions without local rollouts are not inferred from token counts.
+- Session metadata, turn model/effort/settings, recorded rate limits and explicit
+  compaction records are retained as evidence, even without token usage. A context
+  drop alone is not labeled a compaction. Counter resets establish a new baseline
+  and are surfaced; usage at the reset boundary is not replayed.
+- Skills advertised in recorded instructions are shown even without activity.
+  A tool-call path reference is separate evidence and does not prove a successful
+  read or invocation. Installed skills, the complete initial catalog and all
+  available tool definitions remain unknown. Plugin namespaces are inferred
+  associations, not confirmed plugin use. Nested calls in wrapper source are
+  references, not executed-call counts.
+- Recorded instruction sizes use bytes / 4. They cannot attribute the actual
+  request tokens to base instructions, skills, tool definitions or attachments.
+  Evidence is bounded by the retained line window; absence does not prove non-use.
+
+An optional API-equivalent estimate is available in Codex Observe and session
+detail. Set `CODEX_API_PRICING_JSON` before starting the monitor to an object keyed
+by the **exact recorded model name**. Each entry supplies `input`, `cachedInput`,
+and `output` rates in USD per million tokens. For example, with hypothetical rates:
+
+```sh
+CODEX_API_PRICING_JSON='{"example-model":{"input":2,"cachedInput":0.5,"output":10}}' npm start
+```
+
+The estimate charges fresh input, cached input and output once each, using the
+most recent recorded turn model for each cumulative usage increment. It does not
+add reasoning again. Unknown/invalid model rates leave the total unknown; partial
+priced amounts are exposed separately. No default prices or model-name guesses
+are applied. Configure rates appropriate to the session and service tier. A
+single configured rate per model does not reconstruct historical price changes,
+and missing turn records can limit model attribution. This estimate is not a
+subscription charge. Actual billing and the existing Stats cost remain unknown.
 
 Missing provider directories are harmless; the periodic rescan finds them when
 created. No API keys, transcript changes, or additional runtime dependencies are

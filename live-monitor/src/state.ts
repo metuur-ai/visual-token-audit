@@ -63,6 +63,15 @@ export function updateAgg(ev: MonitorEvent) {
   if (ev.kind === "prompt") a.prompts++;
   if (ev.model) a.models[ev.model] = (a.models[ev.model] ?? 0) + 1;
   if (ev.usage) {
+    if (ev.provider === "codex") {
+      a.usageByModel ??= Object.create(null);
+      const model = ev.model ?? "codex-unknown";
+      const u = a.usageByModel[model] ??= { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+      u.input += ev.usage.input;
+      u.output += ev.usage.output;
+      u.cacheRead += ev.usage.cacheRead;
+      u.cacheWrite += ev.usage.cacheWrite;
+    }
     a.usage.input += ev.usage.input;
     a.usage.output += ev.usage.output;
     a.usage.cacheRead += ev.usage.cacheRead;

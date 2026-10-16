@@ -307,12 +307,22 @@ function TreeNode({ node, m, sel, onSel, open, toggle }) {
 function ContextPanel({ n, m }) {
   const cap = n.contextWindow ?? m.cap;
   const usage = n.usage ?? m.session?.usage;
+  const request = n.requestContext;
+  const evidence = n.evidence ?? m;
+  const apiCost = n.apiEquivalentCost;
   if (m.session?.provider === 'codex') return html`<section class="panel fade">
     <div class="ph"><span class="pt">Codex context</span><span class="psub">${n.model || ''}</span></div>
-    <div class="big">${fmt(n.ctx)} <span>${cap ? '/ ' + fmt(cap) : 'tokens'}</span></div>
-    <div class="psub">Peak request input · capacity ${cap ? 'reported by Codex' : 'unavailable'}</div>
+    <div class="big">${request?.latest ? fmt(request.latest.tokens) : 'Unknown'} <span>${request?.latest?.window ? '/ ' + fmt(request.latest.window) : 'tokens'}</span></div>
+    <div class="psub">Latest reported request input · ${request?.latest?.model || 'model unknown'} · capacity ${request?.latest?.window ? 'reported by Codex' : 'unavailable'}</div>
+    <div class="lp-d wide">Peak reported input: ${request?.peak ? fmt(request.peak.tokens) : 'unknown'}${request?.peak ? ` · ${request.peak.model || 'unknown model'} · capacity ${request.peak.window ? fmt(request.peak.window) : 'unknown'}` : ''}</div>
     <div class="rows">${[['Fresh input', usage?.input], ['Cached input', usage?.cacheRead], ['Output', usage?.output], ['Reasoning (included in output)', usage?.reasoning]].map(([label, value]) => html`<div class="row"><span class="k">${label}</span><span class="v num">${fmt(value)}</span></div>`)}</div>
-    <div class="lp-d">Token totals include cached input. Startup instructions and tool activity are shown below; billed cost is not recorded in the rollout.</div>
+    <div class="lp-d wide">Input is a request measurement, not exact current occupancy or a breakdown by instructions, history, tools and attachments. Cached input is included once; reasoning is part of output. Each session's usage excludes its linked children.</div>
+    <div class="row"><span class="k">API-equivalent estimate</span><span class="v num">${apiCost?.totalUSD != null ? money(apiCost.totalUSD) : 'Unknown'}</span></div>
+    <div class="lp-d wide">Uses explicitly configured rates per model. This is not a subscription charge; billed cost is not recorded.</div>
+    <details><summary>Recorded session evidence · ${evidence.turnContexts?.length || 0} turn contexts · ${evidence.compactions?.length || 0} compaction records</summary>
+      <pre style="white-space:pre-wrap;overflow-wrap:anywhere;max-height:280px;overflow:auto">${JSON.stringify({ metadata: evidence.sessionMetadata, turnContexts: evidence.turnContexts, compactions: evidence.compactions, rateLimits: evidence.rateLimits, counterResets: evidence.counterResets, apiEquivalentCost: apiCost }, null, 2)}</pre>
+    </details>
+    ${evidence.counterResets?.length ? html`<div class="lp-d wide">A cumulative counter reset was recorded. Usage resumes from the new baseline; the reset record is not counted as new usage.</div>` : null}
   </section>`;
   const buf = n === m.root ? AUTOCOMPACT_BUF : 0;
   const cb = n.ctxBreakdown;
@@ -382,7 +392,7 @@ function AggregatePanel({ n, m, scope }) {
     ['Wall time', durFmt(t ? m.rollDur(n) : n.dur), t ? 'children run inside this span' : 'own execution'],
     ['Tool calls', '' + (t ? r.tools : selfTools), Object.keys(n.tools || {}).length + ' distinct here'],
     ['Sub-agents', '' + r.agents, r.agents ? 'depth ' + m.depth(n) : 'leaf node'],
-    ['Turns', '' + (t ? r.turns : (n.turns || 0)), shortModel(n.model)],
+    [m.session?.provider === 'codex' ? 'Usage increments' : 'Turns', '' + (t ? r.turns : (n.turns || 0)), m.session?.provider === 'codex' ? 'Reported deltas; not user turns' : shortModel(n.model)],
   ];
   return html`<section class="panel fade">
     <div class="ph"><span class="pt">Aggregate</span><span class="psub">${t ? 'entire subtree' : 'self only'}</span></div>
@@ -507,7 +517,7 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
     const instructions = resources.filter(r => r.kind !== 'skill');
     return html`<section class="panel fade">
       <div class="ph"><span class="pt">Recorded instructions</span><span class="psub">${instructions.length} instruction blocks</span></div>
-      <div class="lp-d">Instructions serialized in this session. Sizes are byte-based token estimates, not measured context occupancy. Skills with session activity appear in the resource details above.</div>
+      <div class="lp-d">Instructions serialized in this session. Sizes are byte-based token estimates, not measured context occupancy. Advertised skills and recorded references appear in the resource details above.</div>
       <div class="rows">${instructions.map(r => html`<div class="row"><span class="k">${r.name}</span><span class="v num">~${fmt(r.tokens)} tokens</span></div>`)}</div>
       ${!resources.length ? html`<div class="empty">Startup context is not present in the retained transcript records.</div>` : null}
       ${m.coverage?.bounded ? html`<div class="lp-d">Activity detail covers the latest ${m.coverage.retainedLines} retained records; token totals cover the full collected session.</div>` : null}
@@ -642,6 +652,7 @@ function LoadingPanel({ n, m, scope, preF, setPreF, dynF, setDynF, grpOpen, togg
 
 function UsagePanel({ n, m, scope }) {
   const t = scope === 'tree';
+  const codex = m.session?.provider === 'codex';
   const nodes = useMemo(() => { const o = []; if (t) m.walk(n, x => o.push(x)); else o.push(n); return o; }, [n, m, t]);
   // tool calls
   const tools = {};
@@ -661,7 +672,15 @@ function UsagePanel({ n, m, scope }) {
   const kmax = Math.max(1, ...krows.map(([, v]) => v.pre + v.dyn));
   // per-model selfTok
   const models = {};
-  nodes.forEach(x => { const mm = shortModel(x.model); models[mm] = (models[mm] || 0) + (x.selfTok || 0); });
+  nodes.forEach(x => {
+    if (codex) {
+      for (const { model, usage } of x.apiEquivalentCost?.byModel || []) {
+        models[model] = (models[model] || 0) + usage.input + usage.cacheRead + usage.cacheWrite + usage.output;
+      }
+    } else {
+      const mm = shortModel(x.model); models[mm] = (models[mm] || 0) + (x.selfTok || 0);
+    }
+  });
   const mrows = Object.entries(models).sort((a, b) => b[1] - a[1]);
   const mmax = Math.max(1, ...mrows.map(r => r[1]));
   return html`<section class="panel fade">
@@ -673,12 +692,12 @@ function UsagePanel({ n, m, scope }) {
         trows.slice(0, 18).map(([k, v]) => html`<div class="ubar"><span class="un" title=${k}>${k.replace(/^mcp__/, '')}</span><span class="ut"><i style="width:${v / tmax * 100}%;background:${k.startsWith('mcp__') ? COLOR.mcp : COLOR.tool}"></i></span><span class="uc num">${v}</span></div>`)}
       </div>
       <div>
-        <div class="ug-h"><span>Tokens by kind</span><span>amber = preloaded · blue = invoked</span></div>
+        <div class="ug-h"><span>${codex ? 'Recorded text estimates' : 'Tokens by kind'}</span><span>${codex ? 'amber = instructions · blue = results' : 'amber = preloaded · blue = invoked'}</span></div>
         ${krows.length === 0 ? html`<div class="empty">no resource tokens recorded</div>` :
         krows.map(([k, v]) => html`<div class="ubar"><span class="un">${k}</span><span class="ut" style="display:flex"><i style="width:${v.pre / kmax * 100}%;background:#eab308;border-radius:0"></i><i style="width:${v.dyn / kmax * 100}%;background:#2563eb;border-radius:0"></i></span><span class="uc num">${fmt(v.pre + v.dyn)}</span></div>`)}
       </div>
       <div>
-        <div class="ug-h"><span>Model interactions</span><span>self tokens</span></div>
+        <div class="ug-h"><span>${codex ? 'Usage by recorded model' : 'Model interactions'}</span><span>self tokens</span></div>
         ${mrows.map(([k, v]) => html`<div class="ubar"><span class="un" title=${k}>${k}</span><span class="ut"><i style="width:${v / mmax * 100}%;background:${COLOR.agent}"></i></span><span class="uc num">${fmt(v)}</span></div>`)}
       </div>
     </div>
