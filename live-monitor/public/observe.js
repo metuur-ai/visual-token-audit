@@ -815,7 +815,7 @@ function App() {
       .then(j => {
         if (!alive) return;
         const allSessions = j.sessions || [];
-        const ss = allSessions.filter(s => !s.parentSessionId).slice().sort((a, b) => String(b.lastTs).localeCompare(String(a.lastTs)));
+        const ss = allSessions.filter(s => !s.parentSessionId || s.parentSessionId === s.sessionId).slice().sort((a, b) => String(b.lastTs).localeCompare(String(a.lastTs)));
         setSessions(ss);
         setSid(cur => {
           let rootId = cur;

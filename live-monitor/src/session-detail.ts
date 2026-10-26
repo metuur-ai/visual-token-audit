@@ -14,7 +14,7 @@ import { codexApiEstimate, codexContext } from "./codex-analysis.ts";
 import { sessionLines, sessions, subagentMeta } from "./state.ts";
 import { contextWindowForModel } from "./startup-inventory.ts";
 import { AgentDispatch, AutoLoad, CountMap, InvokedLoad, TreeNode, bump, chainDurationMs, chainModel, chainSubtree, chainToolCount, chainUsage, claimChain, classifyReminder, collectSidechainChains, countNodes, inputSummary, mcpServer, promptOf, ruleTokenEstimate, toolNodeKind } from "./tree.ts";
-import { Usage } from "./types.ts";
+import { SessionAgg, Usage } from "./types.ts";
 import { clip, scaleUsage } from "./util.ts";
 
 export function buildSessionDetail(sessionId: string): string | null {
@@ -270,6 +270,38 @@ export function buildSessionDetail(sessionId: string): string | null {
       ...(dur !== undefined ? { durationMs: dur } : {}),
       label: clip(c.promptText, LABEL_LEN),
     });
+  }
+  // Codex children have separate rollout stores rather than inline sidechains.
+  // Attach each rollout to its owning session, preserving nested agents even
+  // when the parent's spawn call has fallen outside the retained line window.
+  if (agg.provider === "codex") {
+    const childrenByParent = new Map<string, SessionAgg[]>();
+    for (const child of sessions.values()) {
+      if (child.provider !== "codex" || !child.parentSessionId) continue;
+      const siblings = childrenByParent.get(child.parentSessionId) ?? [];
+      siblings.push(child);
+      childrenByParent.set(child.parentSessionId, siblings);
+    }
+    const containers = new Map<string, TreeNode[]>([[sessionId, roots]]);
+    for (const [parentId, container] of containers) {
+      for (const child of childrenByParent.get(parentId) ?? []) {
+        if (containers.has(child.sessionId)) continue;
+        const childLines = sessionLines.get(child.sessionId) ?? [];
+        const promptText = childLines.find(ln => ln.kind === "prompt")?.text ?? "";
+        const children = chainSubtree({ rootTs: child.firstTs, promptText,
+          lines: childLines, claimed: false, source: "file" });
+        const name = child.agentName ?? child.sessionId;
+        const durationMs = Math.max(0, Date.parse(child.lastTs) - Date.parse(child.firstTs));
+        const model = [...childLines].reverse().find(ln => ln.model && ln.model !== "codex-unknown")?.model;
+        container.push({ kind: "agent", name, ts: child.firstTs, label: clip(promptText, LABEL_LEN),
+          usage: child.usage, durationMs, children });
+        containers.set(child.sessionId, children);
+        bump(agents, name, 1, child.usage);
+        dispatches.push({ agent: name, ts: child.firstTs, model, usage: child.usage,
+          toolCount: Object.values(child.tools).reduce((sum, count) => sum + count, 0),
+          durationMs, label: clip(promptText, LABEL_LEN) });
+      }
+    }
   }
   dispatches.sort((a, b) => a.ts.localeCompare(b.ts));
 

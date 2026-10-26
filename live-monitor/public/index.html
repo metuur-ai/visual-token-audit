@@ -90,6 +90,16 @@
     background: var(--bg2);
   }
   .panel-scroll { overflow-y: auto; flex: 1; }
+  .session-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+  .session-controls input, .session-controls select {
+    background: var(--bg2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 5px 7px; font: 12px var(--sans);
+  }
+  .session-controls input { flex: 1 1 240px; min-width: 0; }
+  .session-controls input::placeholder { color: var(--dim); }
+  .session-controls input:focus-visible, .session-controls select:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
 
   /* ── Left panel border ── */
   /* container-type lets the sessions table react to THIS panel's width, which
@@ -117,6 +127,8 @@
   tr.clickable { cursor: pointer; }
   tr.clickable:hover td { background: #eff6ff; }
   tr.selected td { background: #dbeafe !important; }
+  .session-project { display: block; overflow: hidden; text-overflow: ellipsis; }
+  .session-slug { display: block; margin-top: 4px; font-size: 11px; line-height: 1.4; white-space: normal; overflow-wrap: anywhere; }
 
   /* column widths.
      Project is the only `auto` column: it soaks up whatever the sized columns
@@ -521,10 +533,11 @@
 
 <div id="main">
   <div class="panel" id="left-panel">
-    <div class="panel-header">Sessions
-      <select id="provider-filter" aria-label="Filter by provider" style="margin-left:12px;background:transparent;color:inherit;border:1px solid #aaa;border-radius:4px;padding:3px">
+    <div class="panel-header session-controls"><span>Sessions</span>
+      <select id="provider-filter" aria-label="Filter by provider">
         <option value="all">All providers</option><option value="claude">Claude Code</option><option value="codex">Codex</option>
       </select>
+      <input id="session-search" type="search" aria-label="Search sessions by directory, name, slug or ID" placeholder="Search directory, session name, slug or ID…" autocomplete="off" spellcheck="false">
     </div>
     <div class="panel-scroll" id="sessions-scroll">
       <table id="sessions-table">

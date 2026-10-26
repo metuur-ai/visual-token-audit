@@ -212,7 +212,7 @@ shapes (Bun 1.3.x, transcript format mid-2026):
   (injected caveats) are skipped.
 - `type:"system"` → surfaced only when it carries output/hook errors.
 - Non-event line types present in transcripts and **skipped**: `last-prompt`,
-  `mode`, `permission-mode`, `ai-title`, `file-history-snapshot`, `attachment`,
+  `mode`, `permission-mode`, `file-history-snapshot`, `attachment`,
   `summary`.
 
 Malformed JSON lines are skipped silently; all parse and IO is wrapped in
@@ -349,6 +349,22 @@ Observe lists only parent sessions in its picker. Child nodes carry their own
 resource/call evidence, and selection keeps the parent session URL and execution
 tree. Links to known child sessions resolve to their parent session.
 
+The main dashboard also lists only parent Codex sessions, including in its session
+count. Subagents and guardian reviews appear inside the parent's detail tree and
+Observe view, preserving nested parent relationships. Live child activity refreshes
+the open parent detail. Dashboard usage totals still include each child's work once.
+
+Use the dashboard search to filter by working directory, project name, saved session
+name, transcript/project slug, or full session ID. Matching ignores case; multiple
+words must all match, and search combines with the provider selector. Totals and the
+activity feed follow the matching parent sessions, including their children's work.
+Clear the search to restore the full list. Saved Claude titles come from transcript
+metadata; Codex names come from `$CODEX_HOME/session_index.jsonl` when available and
+refresh during the periodic rescan. Hover over a project or session for its full
+directory and recorded name/slug.
+Each dashboard row and the right-hand details card show the session slug beneath the project name, falling
+back to the saved session name or short session ID when no slug is recorded.
+
 Guardian/auto-review sessions also attach to their parent using the top-level
 `session_meta.payload.parent_thread_id`, even when `source.subagent` only carries
 `other: "guardian"`. The rollout `id` remains the child identity; `session_id`
@@ -359,3 +375,8 @@ authorization classifications, rationales, and request previews. These are publi
 assistant response records, not internal reasoning. The tab is selected by default
 when review activity exists but no skill activity does. A guardian with no direct
 tool invocations correctly retains zero tool/skill counts.
+
+Forked rollouts may embed copied parent history. The first `session_meta` owns
+the rollout identity; later metadata from another session cannot replace it.
+Copied response items with an original creation time before the rollout's creation
+are excluded from its execution counts, while inherited instructions remain visible.

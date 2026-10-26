@@ -30,11 +30,18 @@ export const clients = new Set<(ev: MonitorEvent) => void>();
 // ----------------------------------------------------------------------------
 // Aggregation
 // ----------------------------------------------------------------------------
+const pendingSessionNames = new Map<string, string>();
+
 export function updateAgg(ev: MonitorEvent) {
   let a = sessions.get(ev.sessionId);
+  if (!a && ev.metadataOnly) {
+    if (ev.sessionName) pendingSessionNames.set(ev.sessionId, ev.sessionName);
+    return;
+  }
   if (!a) {
     a = {
       sessionId: ev.sessionId,
+      sessionName: pendingSessionNames.get(ev.sessionId),
       provider: ev.provider ?? "claude",
       parentSessionId: ev.parentSessionId,
       agentName: ev.agentName,
@@ -52,7 +59,12 @@ export function updateAgg(ev: MonitorEvent) {
       agents: {},
     };
     sessions.set(ev.sessionId, a);
+    pendingSessionNames.delete(ev.sessionId);
   }
+  if (ev.sessionName) a.sessionName = ev.sessionName;
+  if (ev.slug) a.slug = ev.slug;
+  if (ev.projectSlug) a.projectSlug = ev.projectSlug;
+  if (ev.metadataOnly) return;
   if (ev.parentSessionId) a.parentSessionId = ev.parentSessionId;
   if (ev.agentName) a.agentName = ev.agentName;
   a.project = ev.project || a.project;
@@ -114,11 +126,13 @@ export function pruneSessionStores() {
 
 export function emit(partial: Omit<MonitorEvent, "id">, broadcast: boolean, line?: SessionLine) {
   const ev: MonitorEvent = { id: nextId++, ...partial };
-  ring.push(ev);
-  if (ring.length > RING_MAX) ring.shift();
+  if (!ev.metadataOnly) {
+    ring.push(ev);
+    if (ring.length > RING_MAX) ring.shift();
+  }
   updateAgg(ev);
   if (ev.provider === "codex") observeCache.clear();
-  if (line) storeSessionLine(ev.sessionId, line);
+  if (line && !ev.metadataOnly) storeSessionLine(ev.sessionId, line);
   if (broadcast) {
     for (const send of clients) {
       try {

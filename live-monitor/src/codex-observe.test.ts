@@ -3,6 +3,7 @@ import { CodexAdapter } from "./codex.ts";
 import { parseLine } from "./parse.ts";
 import { emit, sessions, sessionLines, observeCache } from "./state.ts";
 import { buildObserveSnapshot } from "./observe.ts";
+import { buildSessionDetail } from "./session-detail.ts";
 
 test("Codex Observe exposes recorded resources, call evidence, timeline and linked child usage", () => {
   const parent = new CodexAdapter("observe-parent");
@@ -37,6 +38,11 @@ test("Codex Observe exposes recorded resources, call evidence, timeline and link
     expect(data.nodes[1]).toMatchObject({ type: "agent", name: "/root/reviewer", parentId: "codex:observe-parent", selfTok: 30 });
     expect(data.nodes[1].evidence.callDetails).toHaveLength(1);
     expect(data.nodes[1].evidence.callDetails[0]).toMatchObject({ name: "read_file", output: "child result\n" });
+    const detail = JSON.parse(buildSessionDetail("codex:observe-parent")!);
+    expect(detail.tree).toEqual(expect.arrayContaining([expect.objectContaining({
+      kind: "agent", name: "/root/reviewer", usage: { input: 20, output: 10, cacheRead: 0, cacheWrite: 0, reasoning: 0 },
+      children: expect.arrayContaining([expect.objectContaining({ kind: "tool", name: "read_file" })]),
+    })]));
     expect(data.callDetails).toHaveLength(1);
     expect(data.callDetails[0].name).toBe("exec");
     ingest(child, "event_msg", count(40, 20));
@@ -74,6 +80,35 @@ test("guardian review with top-level parent_thread_id stays under its owning ses
     expect(data.nodes[1].evidence.reviews).toEqual([expect.objectContaining({ outcome: "allow", risk: "low",
       authorization: "high", rationale: "Local test requested by the user.", request: "Review a local test run" })]);
     expect(data.reviews).toEqual([]);
+    const detail = JSON.parse(buildSessionDetail(ids[0])!);
+    expect(detail.tree).toEqual([expect.objectContaining({ kind: "agent", name: "guardian", usage: sessions.get(ids[1])!.usage })]);
+    expect(detail.dispatches).toEqual([expect.objectContaining({ agent: "guardian", toolCount: 0 })]);
+  } finally {
+    for (const id of ids) { sessions.delete(id); sessionLines.delete(id); observeCache.delete(id); }
+  }
+});
+
+test("nested Codex agents remain under their immediate parent, including beyond four levels", () => {
+  const ids = Array.from({ length: 7 }, (_, i) => `codex:nested-${i}`);
+  try {
+    for (let i = 0; i < ids.length; i++) {
+      const adapter = new CodexAdapter(`nested-${i}`);
+      const raw = adapter.convert(JSON.stringify({ timestamp: "2026-10-25T12:00:00Z", type: "session_meta",
+        payload: { id: `nested-${i}`, ...(i ? { parent_thread_id: `nested-${i - 1}` } : {}) } }));
+      const parsed = parseLine(raw!, "test")!;
+      emit(parsed.ev, false, parsed.line);
+    }
+    const detail = JSON.parse(buildSessionDetail(ids[0])!);
+    let tree = detail.tree;
+    for (const id of ids.slice(1)) {
+      expect(tree).toHaveLength(1);
+      expect(tree[0]).toMatchObject({ kind: "agent", name: id });
+      tree = tree[0].children;
+    }
+    expect(detail.dispatches).toHaveLength(6);
+    const observe = JSON.parse(buildObserveSnapshot(ids[0])!);
+    expect(observe.nodes.map((node: any) => node.id)).toEqual(ids);
+    expect(observe.nodes.at(-1).parentId).toBe(ids.at(-2));
   } finally {
     for (const id of ids) { sessions.delete(id); sessionLines.delete(id); observeCache.delete(id); }
   }

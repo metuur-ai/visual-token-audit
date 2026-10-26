@@ -4,7 +4,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, readSync, readdirSync, statSync, watch } from "fs";
 import { basename, join } from "path";
-import { CODEX_SESSION_DIRS, PROJECTS_DIR, SEED_MTIME_WINDOW_MS } from "./config.ts";
+import { CODEX_HOME, CODEX_SESSION_DIRS, PROJECTS_DIR, SEED_MTIME_WINDOW_MS } from "./config.ts";
 import { isCodexFile, transcriptAdapter } from "./transcripts.ts";
 import { parseLine } from "./parse.ts";
 import { detailCache, emit, fileState, observeCache, ring, sessions, subagentMeta } from "./state.ts";
@@ -12,6 +12,35 @@ import { SubagentPath } from "./types.ts";
 import { log } from "./util.ts";
 
 const adapters = new Map<string, (raw: string) => string | null>();
+let nameIndexVersion = "";
+let codexSessionNames = new Map<string, string>();
+
+// Saved Codex chat names live in the local index, outside rollout transcripts.
+export function refreshCodexSessionNames(broadcast = false, path = join(CODEX_HOME, "session_index.jsonl")) {
+  try {
+    const st = statSync(path);
+    const version = `${path}:${st.mtimeMs}:${st.size}`;
+    if (version !== nameIndexVersion) {
+      const names = new Map<string, string>();
+      const raw = readFileSync(path, "utf8");
+      for (const line of raw.slice(0, raw.lastIndexOf("\n") + 1).split("\n")) {
+        try {
+          const record = JSON.parse(line);
+          if (typeof record.id === "string" && typeof record.thread_name === "string" && record.thread_name.trim())
+            names.set(`codex:${record.id}`, record.thread_name);
+        } catch { /* Ignore malformed and partially written index entries. */ }
+      }
+      codexSessionNames = names;
+      nameIndexVersion = version;
+    }
+    for (const [id, sessionName] of codexSessionNames) {
+      const agg = sessions.get(id);
+      if (!agg || agg.sessionName === sessionName) continue;
+      emit({ sessionId: id, provider: "codex", project: agg.project, ts: agg.lastTs,
+        kind: "system", sessionName, metadataOnly: true }, broadcast);
+    }
+  } catch { /* The optional local name index may not exist. */ }
+}
 
 export function slugOf(path: string): string {
   // .../.claude/projects/<slug>/<file>.jsonl → <slug>
@@ -243,6 +272,7 @@ export function firstScan() {
       } catch {}
     }
   }
+  refreshCodexSessionNames();
   log(`first scan: ${files.length} files, seeded ${seeded} (<=48h), ${ring.length} events, ${sessions.size} sessions`);
 }
 
@@ -266,6 +296,7 @@ export function rescan() {
         readAppended(p, true);
       }
     }
+    refreshCodexSessionNames(true);
   } catch (e) {
     log("rescan error", e);
   }
@@ -304,4 +335,5 @@ export function loadCodexSession(id: string) {
   fileState.delete(path);
   adapters.delete(path);
   seedFile(path);
+  refreshCodexSessionNames();
 }

@@ -17,6 +17,10 @@ export interface MonitorEvent {
   id: number;
   ts: string;
   sessionId: string;
+  sessionName?: string;
+  slug?: string;
+  projectSlug?: string;
+  metadataOnly?: boolean; // search metadata update; does not count as activity
   provider?: Provider;
   parentSessionId?: string;
   agentName?: string;
@@ -40,6 +44,9 @@ export interface MonitorEvent {
 
 export interface SessionAgg {
   sessionId: string;
+  sessionName?: string;
+  slug?: string;
+  projectSlug?: string;
   provider?: Provider;
   parentSessionId?: string;
   agentName?: string;

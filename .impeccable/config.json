@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "dark-glow",
+        "value": "*",
+        "files": [
+          "live-monitor/public/index.html"
+        ],
+        "createdAt": "2026-10-25T20:03:52.089Z",
+        "reason": "Codex review: existing connection and activity LEDs in index.html are intentional status indicators. Retain their incumbent appearance while adding dashboard search."
+      }
+    ]
+  }
+}

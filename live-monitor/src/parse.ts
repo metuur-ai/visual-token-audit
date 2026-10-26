@@ -6,7 +6,8 @@
 //              message.content[] blocks of type thinking|text|tool_use(name,input)
 //   user: message.content is a string (prompt) OR an array containing
 //         {type:"tool_result", tool_use_id, content, is_error}
-//   Non-event line types (last-prompt, mode, permission-mode, ai-title,
+//   Title records update search metadata without counting as activity.
+//   Non-event line types (last-prompt, mode, permission-mode,
 //   file-history-snapshot, attachment, summary, system w/o info) are skipped.
 // ----------------------------------------------------------------------------
 // Parse result carries BOTH the MonitorEvent-shaped payload (for ring/SSE/agg)
@@ -59,6 +60,8 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
   ): ParseResult => ({
     ev: {
       ...ev,
+      ...(!sidechain && typeof o.slug === "string" ? { slug: o.slug } : {}),
+      projectSlug: slug,
       parentSessionId: o.parentSessionId,
       agentName: o.agentName,
       provider: o.provider === "codex" ? "codex" : "claude",
@@ -93,6 +96,13 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
       ...extra,
     },
   });
+
+  if (!sidechain && (type === "ai-title" || type === "custom-title")) {
+    const sessionName = type === "custom-title" ? o.customTitle : o.aiTitle;
+    return typeof sessionName === "string" && sessionName.trim()
+      ? mk({ ts, sessionId, project, kind: "system", sessionName, metadataOnly: true }, {})
+      : null;
+  }
 
   if (type === "assistant") {
     const model: string | undefined = typeof msg?.model === "string" ? msg.model : undefined;
@@ -261,7 +271,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
     return null;
   }
 
-  // last-prompt, mode, permission-mode, ai-title, file-history-snapshot,
+  // last-prompt, mode, permission-mode, file-history-snapshot,
   // attachment, summary, and anything else → not a monitor event.
   return null;
 }

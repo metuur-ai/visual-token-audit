@@ -648,8 +648,8 @@ export function buildObserveSnapshot(sessionId: string): string | null {
   const nodes: ObsNode[] = [root];
   if (agg.provider === "codex") {
     const visited = new Set([agg.sessionId]);
-    const addChildren = (parent: string, depth: number) => {
-      if (depth > 4 || nodes.length >= 50) return;
+    const parents = [agg.sessionId];
+    for (const parent of parents) {
       for (const child of sessions.values()) {
         if (child.provider !== "codex" || child.parentSessionId !== parent || visited.has(child.sessionId)) continue;
         visited.add(child.sessionId);
@@ -665,10 +665,9 @@ export function buildObserveSnapshot(sessionId: string): string | null {
           usage: child.usage, contextWindow: [...childLines].reverse().find(l => l.contextWindow)?.contextWindow,
           cost: 0, ctx: codexContext(childLines).peak?.tokens ?? 0, turns: metrics.turns, tools: child.tools, pre: [],
           dyn: obsDyn(childLines, new Map()) });
-        addChildren(child.sessionId, depth + 1);
+        parents.push(child.sessionId);
       }
-    };
-    addChildren(agg.sessionId, 1);
+    }
   }
 
   // Tier 2: reconstruct the base floor from local disk (skills/agents/memory)

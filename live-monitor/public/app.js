@@ -14,7 +14,29 @@ const feedItems = [];           // MonitorEvent[], newest-first, capped 200
 const FEED_CAP = 200;
 const ACTIVE_THRESHOLD_MS = 60_000;
 let providerFilter = 'all';
+let searchTerms = [];
 const matchesProvider = item => providerFilter === 'all' || (item.provider ?? 'claude') === providerFilter;
+function matchesDashboardFilters(item) {
+  if (!matchesProvider(item)) return false;
+  if (!searchTerms.length) return true;
+  const s = sessions.get(rootSessionId(item.sessionId)) ?? item;
+  const text = [s.cwd, s.project, s.sessionName, s.slug, s.projectSlug, s.sessionId].filter(Boolean).join(' ').toLowerCase();
+  return searchTerms.every(term => text.includes(term));
+}
+const isDashboardSession = s => matchesDashboardFilters(s) && !(s.provider === 'codex' && s.parentSessionId && s.parentSessionId !== s.sessionId);
+
+function rootSessionId(sessionId) {
+  const visited = new Set([sessionId]);
+  let session = sessions.get(sessionId);
+  while (session?.provider === 'codex' && session.parentSessionId) {
+    const parentId = session.parentSessionId;
+    if (visited.has(parentId)) break;
+    visited.add(parentId);
+    sessionId = parentId;
+    session = sessions.get(sessionId);
+  }
+  return sessionId;
+}
 
 /** Currently open session id, or null */
 let openSessionId = null;
@@ -185,14 +207,14 @@ function safe(s) { return s == null ? '' : String(s); }
 function recomputeTotals() {
   let totalEvents = 0, input = 0, output = 0, cr = 0, cw = 0;
   for (const s of sessions.values()) {
-    if (!matchesProvider(s)) continue;
+    if (!matchesDashboardFilters(s)) continue;
     totalEvents += s.events ?? 0;
     input  += s.usage?.input      ?? 0;
     output += s.usage?.output     ?? 0;
     cr     += s.usage?.cacheRead  ?? 0;
     cw     += s.usage?.cacheWrite ?? 0;
   }
-  tSessions.textContent = [...sessions.values()].filter(matchesProvider).length;
+  tSessions.textContent = [...sessions.values()].filter(isDashboardSession).length;
   tEvents.textContent   = fmt(totalEvents);
   tInput.textContent    = fmt(input);
   tOutput.textContent   = fmt(output);
@@ -201,8 +223,18 @@ function recomputeTotals() {
 }
 
 // ── Sessions table ────────────────────────────────────────────────────────────
+function renderSessionProject(td, session) {
+  td.innerHTML = '';
+  td.appendChild(el('span', 'session-project', (session.provider === 'codex' ? 'Codex · ' : 'Claude · ') + safe(session.project)));
+  const identity = session.slug || session.sessionName || shortId(session.sessionId);
+  const label = el('span', 'session-slug', identity);
+  withTip(label, identity, session.slug ? 'Session slug' : session.sessionName ? 'Session name' : 'Session id');
+  td.appendChild(label);
+  withTip(td, [session.project, session.cwd].filter(Boolean).join('\n'), 'Project / directory');
+}
+
 function renderSessions() {
-  const sorted = [...sessions.values()].filter(matchesProvider).sort(
+  const sorted = [...sessions.values()].filter(isDashboardSession).sort(
     (a, b) => new Date(b.lastTs ?? 0) - new Date(a.lastTs ?? 0)
   );
 
@@ -211,7 +243,7 @@ function renderSessions() {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
     td.colSpan = 11; td.className = 'empty';
-    td.textContent = 'No sessions yet.';
+    td.textContent = searchTerms.length ? 'No sessions match your search.' : 'No sessions yet.';
     tr.appendChild(td); sessBody.appendChild(tr);
     return;
   }
@@ -230,8 +262,8 @@ function renderSessions() {
     const cells = [
       () => {
         const td = document.createElement('td');
-        td.textContent = (s.provider === 'codex' ? 'Codex · ' : 'Claude · ') + safe(s.project);
-        return withTip(td, s.project, 'Project');
+        renderSessionProject(td, s);
+        return td;
       },
       () => {
         const td = document.createElement('td');
@@ -241,7 +273,7 @@ function renderSessions() {
           td.appendChild(dot);
         }
         td.appendChild(document.createTextNode(shortId(s.sessionId)));
-        return withTip(td, s.sessionId, 'Session id');
+        return withTip(td, [s.sessionName, s.slug, s.sessionId].filter(Boolean).join('\n'), 'Session');
       },
       () => { const td = document.createElement('td'); td.textContent = safe(s.prompts ?? 0); return td; },
       () => { const td = document.createElement('td'); td.textContent = fmt(s.usage?.input);      return td; },
@@ -383,7 +415,7 @@ function prependFeedItem(ev) {
   const emptyLi = feedList.querySelector('li.empty');
   if (emptyLi) emptyLi.remove();
 
-  if (!matchesProvider(ev)) return;
+  if (!matchesDashboardFilters(ev)) return;
   const li = makeFeedItem(ev);
   feedList.insertBefore(li, feedList.firstChild);
 
@@ -395,10 +427,12 @@ function prependFeedItem(ev) {
 // ── Session aggregate: incremental update from one MonitorEvent ───────────────
 function applyEventToSession(ev) {
   let agg = sessions.get(ev.sessionId);
+  if (!agg && ev.metadataOnly) return;
   if (!agg) {
     agg = {
       sessionId: ev.sessionId,
       provider: ev.provider ?? "claude",
+      parentSessionId: ev.parentSessionId,
       project:   ev.project,
       firstTs:   ev.ts,
       lastTs:    ev.ts,
@@ -415,6 +449,11 @@ function applyEventToSession(ev) {
     sessions.set(ev.sessionId, agg);
   }
 
+  for (const key of ['cwd', 'sessionName', 'slug', 'projectSlug']) {
+    if (ev[key]) agg[key] = ev[key];
+  }
+  if (ev.parentSessionId) agg.parentSessionId = ev.parentSessionId;
+  if (ev.metadataOnly) return;
   agg.events++;
   if (!agg.firstTs || ev.ts < agg.firstTs) agg.firstTs = ev.ts;
   if (!agg.lastTs  || ev.ts > agg.lastTs)  agg.lastTs  = ev.ts;
@@ -463,6 +502,11 @@ async function loadSnapshot() {
       sessions.set(s.sessionId, {
         sessionId: s.sessionId,
         provider: s.provider ?? "claude",
+        parentSessionId: s.parentSessionId,
+        cwd: s.cwd,
+        sessionName: s.sessionName,
+        slug: s.slug,
+        projectSlug: s.projectSlug,
         project:   s.project,
         firstTs:   s.firstTs,
         lastTs:    s.lastTs,
@@ -488,7 +532,7 @@ async function loadSnapshot() {
     const evs = [...data.events].reverse().slice(0, FEED_CAP);
     for (const ev of evs) {
       feedItems.push(ev);
-      if (matchesProvider(ev)) feedList.appendChild(makeFeedItem(ev));
+      if (!ev.metadataOnly && matchesDashboardFilters(ev)) feedList.appendChild(makeFeedItem(ev));
     }
   } else {
     feedList.innerHTML = '<li class="empty">No events yet.</li>';
@@ -868,6 +912,12 @@ function renderDetail(detail) {
   withTip(titleRow, detail.project ?? detail.sessionId, 'Project');
   headerCard.appendChild(titleRow);
 
+  const session = sessions.get(detail.sessionId) ?? detail;
+  const identity = session.slug || session.sessionName || shortId(session.sessionId);
+  const identityRow = el('div', 'session-slug', identity);
+  withTip(identityRow, identity, session.slug ? 'Session slug' : session.sessionName ? 'Session name' : 'Session id');
+  headerCard.appendChild(identityRow);
+
   // Full session id + copy button
   const idRow = el('div', 'session-id-row');
   const idText = withTip(el('span', 'session-id-text', detail.sessionId), detail.sessionId, 'Session id');
@@ -1076,17 +1126,24 @@ function connectSSE() {
     if (!ev || !ev.sessionId || !ev.kind) return;
 
     applyEventToSession(ev);
+    if (ev.metadataOnly) {
+      renderDashboard();
+      if (openSessionId === rootSessionId(ev.sessionId)) scheduleDetailRefresh(openSessionId);
+      return;
+    }
     prependFeedItem(ev);
 
-    // If detail for this session is open, schedule a refresh
-    if (openSessionId === ev.sessionId) {
-      scheduleDetailRefresh(ev.sessionId);
+    // Child activity belongs to the open parent session's execution tree.
+    const rootId = rootSessionId(ev.sessionId);
+    if (openSessionId === rootId) {
+      scheduleDetailRefresh(rootId);
     }
 
     // Targeted session row update
     const existingRow = sessBody.querySelector('tr[data-sid="' + CSS.escape(ev.sessionId) + '"]');
-    if (existingRow) {
+    if (existingRow && isDashboardSession(sessions.get(ev.sessionId))) {
       const s = sessions.get(ev.sessionId);
+      renderSessionProject(existingRow.cells[0], s);
       existingRow.cells[2].textContent = safe(s.prompts);
       existingRow.cells[3].textContent = fmt(s.usage?.input);
       existingRow.cells[4].textContent = fmt(s.usage?.output);
@@ -1127,7 +1184,8 @@ function connectSSE() {
       renderSessions();
     }
 
-    recomputeTotals();
+    if (searchTerms.length) renderDashboard();
+    else recomputeTotals();
   });
 }
 
@@ -1193,11 +1251,20 @@ setInterval(() => {
   });
 }
 
-document.getElementById('provider-filter').addEventListener('change', e => {
-  providerFilter = e.target.value;
+function renderDashboard() {
   recomputeTotals();
   renderSessions();
-  feedList.replaceChildren(...feedItems.filter(matchesProvider).map(makeFeedItem));
+  feedList.replaceChildren(...feedItems.filter(matchesDashboardFilters).map(makeFeedItem));
+}
+
+document.getElementById('provider-filter').addEventListener('change', e => {
+  providerFilter = e.target.value;
+  renderDashboard();
+});
+
+document.getElementById('session-search').addEventListener('input', e => {
+  searchTerms = e.target.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  renderDashboard();
 });
 
 // ── Init ──────────────────────────────────────────────────────────────────────

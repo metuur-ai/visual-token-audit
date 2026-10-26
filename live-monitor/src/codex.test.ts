@@ -46,6 +46,24 @@ test("metadata survives across appends and model switches", () => {
   expect(parse(a, count(usage(2000, 0, 200)))!.ev).toMatchObject({ project: "other", model: "gpt-next", usage: { input: 1000 } });
 });
 
+test("inherited parent metadata cannot replace a child rollout identity", () => {
+  const child = new CodexAdapter("fallback");
+  parse(child, row("session_meta", { id: "child", cwd: "/tmp/child", parent_thread_id: "parent",
+    source: { subagent: { thread_spawn: { parent_thread_id: "parent", agent_path: "/root/reviewer" } } } }));
+  expect(parse(child, row("session_meta", { id: "parent", session_id: "parent", cwd: "/tmp/parent", source: "cli" }))).toBeNull();
+  const own = parse(child, count(usage(100, 40, 10)))!;
+  expect(own.ev).toMatchObject({ sessionId: "codex:child", parentSessionId: "codex:parent", agentName: "/root/reviewer", cwd: "/tmp/child" });
+});
+
+test("copied response history is context rather than new child executions", () => {
+  const child = new CodexAdapter("child");
+  parse(child, row("session_meta", { id: "child", timestamp: ts, parent_thread_id: "parent" }));
+  expect(parse(child, row("response_item", { type: "function_call", name: "old_parent_tool", call_id: "old", arguments: "{}",
+    internal_chat_message_metadata_passthrough: { create_time: Date.parse(ts) / 1000 - 60 } }))).toBeNull();
+  expect(parse(child, row("response_item", { type: "function_call", name: "child_tool", call_id: "new", arguments: "{}",
+    internal_chat_message_metadata_passthrough: { create_time: Date.parse(ts) / 1000 + 1 } }))!.ev).toMatchObject({ sessionId: "codex:child", tools: ["child_tool"] });
+});
+
 test("counter resets establish a baseline then count new increments", () => {
   const a = setup();
   parse(a, count(usage(1000, 700, 100)));

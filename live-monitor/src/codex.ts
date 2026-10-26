@@ -4,6 +4,8 @@ import { codexResources, nestedToolRequests, codexOutputText, codexSkillDocument
 // Source: openai/codex codex-rs/protocol/src/protocol.rs (RolloutItem).
 export class CodexAdapter {
   private sessionId: string;
+  private hasSessionMeta = false;
+  private createdAt = NaN;
   private cwd = "";
   private parentSessionId?: string;
   private agentName?: string;
@@ -28,6 +30,11 @@ export class CodexAdapter {
       hasOutput: true, codexEvent: { type, data }, ...extra,
     });
     if (o.type === "session_meta") {
+      // Forked child rollouts can embed a second session_meta from copied
+      // parent history. The rollout's first metadata owns its identity.
+      if (this.hasSessionMeta && typeof p.id === "string" && `codex:${p.id}` !== this.sessionId) return null;
+      if (!this.hasSessionMeta) this.createdAt = Date.parse(p.timestamp ?? o.timestamp) / 1000;
+      this.hasSessionMeta = true;
       if (typeof p.id === "string") this.sessionId = `codex:${p.id}`;
       if (typeof p.cwd === "string") this.cwd = p.cwd;
       const spawn = p.source?.subagent?.thread_spawn ?? p.source?.subagent?.spawn;
@@ -99,6 +106,11 @@ export class CodexAdapter {
       });
     }
     if (o.type !== "response_item") return null;
+    // Copied items are re-stamped when written to the child rollout. Their
+    // original creation time identifies parent executions, which must not be
+    // counted again as child prompts/tools. Keep inherited instructions.
+    const itemCreatedAt = p.internal_chat_message_metadata_passthrough?.create_time;
+    if (p.role !== "developer" && p.role !== "system" && Number.isFinite(itemCreatedAt) && itemCreatedAt < this.createdAt) return null;
     if (p.type === "message" && Array.isArray(p.content)) {
       const text = p.content.filter((b: any) => typeof b?.text === "string").map((b: any) => b.text).join("\n");
       if (p.role === "developer" || p.role === "system") return record("system", {}, {
