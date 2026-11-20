@@ -5,6 +5,7 @@ import { loadCodexSession } from "./watch.ts";
 
 
 
+import { execFile } from "child_process";
 import { existsSync, readFileSync } from "fs";
 import { createServer } from "http";
 import { join } from "path";
@@ -195,6 +196,22 @@ export function startHttpServer(opts: { host: string; port: number; publicDir: s
       return new Response(buildProjectsJSON(days), {
         headers: { "Content-Type": "application/json; charset=utf-8" },
       });
+    }
+    if (path === "/api/reveal") {
+      // Open a known project directory in the OS file manager. JSON-only POST, so
+      // cross-origin pages can't trigger it without a CORS preflight we never answer;
+      // and only cwds already listed by /api/projects are accepted.
+      if (req.method !== "POST") return new Response("Method not allowed", { status: 405 });
+      if (!(req.headers.get("Content-Type") || "").startsWith("application/json")) {
+        return new Response("Unsupported media type", { status: 415 });
+      }
+      const body = await req.json().catch(() => null) as { path?: unknown } | null;
+      const target = typeof body?.path === "string" ? body.path : "";
+      const known = (JSON.parse(buildProjectsJSON(60)).projects as { cwd?: string }[]).some(p => p.cwd === target);
+      if (!target || !known || !existsSync(target)) return new Response("Unknown project path", { status: 404 });
+      const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "explorer" : "xdg-open";
+      execFile(cmd, [target], err => { if (err) log("reveal failed", target, err); });
+      return Response.json({ ok: true });
     }
     if (path === "/api/stats") {
       // v4: ?days=N clamped to 1..30, default 14.

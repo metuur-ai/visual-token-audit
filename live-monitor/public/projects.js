@@ -66,15 +66,31 @@ const Nav = () => html`<nav class="nav">
   <a href="/projects" class="on">Projects</a>
 </nav>`;
 
+/* ============================ icons ============================ */
+const svg = d => html`<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${d}</svg>`;
+const ICON_COPY = svg(html`<rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />`);
+const ICON_CHECK = svg(html`<path d="M20 6 9 17l-5-5" />`);
+const ICON_FOLDER = svg(html`<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />`);
+
 /* ============================ project card ============================ */
 function ProjectCard({ p, delay }) {
   const [open, setOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const go = id => { window.location.href = sessionHref(id); };
+  const copyPath = () => navigator.clipboard.writeText(p.cwd)
+    .then(() => { setCopied(true); setTimeout(() => setCopied(false), 1200); });
+  const reveal = () => fetch('/api/reveal', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path: p.cwd }),
+  });
   return html`<section class="pcard fade ${open ? 'open' : ''}" style="animation-delay:${delay}ms">
     <div class="phead" onClick=${() => setOpen(o => !o)} title=${open ? 'collapse sessions' : 'expand sessions'}>
       <span class="pchev">${open ? '▾' : '▸'}</span>
       <span class="pname">${p.name}</span>
-      ${p.cwd ? html`<span class="pcwd">${p.cwd}</span>` : null}
+      ${p.cwd ? html`<span class="pcwd">${p.cwd}</span>
+        <span class="pacts" onClick=${e => e.stopPropagation()}>
+          <button class="pact" title=${copied ? 'copied!' : 'copy path'} aria-label="Copy project path" onClick=${copyPath}>${copied ? ICON_CHECK : ICON_COPY}</button>
+          <button class="pact" title="open in Finder" aria-label="Open project folder in Finder" onClick=${reveal}>${ICON_FOLDER}</button>
+        </span>` : null}
       <div class="pmeta">
         <div class="pm"><span class="l">Last</span><span class="v">${dateLab(p.lastActivity)}</span></div>
         <div class="pm"><span class="l">Sessions</span><span class="v">${int(p.sessionCount)}</span></div>
