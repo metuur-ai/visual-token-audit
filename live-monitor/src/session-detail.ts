@@ -173,7 +173,7 @@ export function buildSessionDetail(sessionId: string): string | null {
     if (ln.kind === "prompt") {
       const isCmd = !!ln.command;
       // Root prompts carry a longer copy so the UI can expand the full prompt.
-      const full = clip(ln.text ?? "", FULL_LABEL_LEN);
+      const full = clip(ln.detailText ?? ln.text ?? "", FULL_LABEL_LEN);
       cur = {
         kind: isCmd ? "command" : "prompt",
         name: isCmd ? ln.command! : "",

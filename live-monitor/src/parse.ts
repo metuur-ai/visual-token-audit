@@ -17,7 +17,7 @@
 
 
 import { join } from "path";
-import { EVIDENCE_LEN, startedAt } from "./config.ts";
+import { EVIDENCE_LEN, FULL_LABEL_LEN, startedAt } from "./config.ts";
 import { MonitorEvent, SessionLine, SubagentPath, ToolUseBlock } from "./types.ts";
 import { clip, detectCommand, detectReminders, detectRules, detectSkillLoads, projectName, snippet, usageFrom } from "./util.ts";
 
@@ -219,7 +219,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
           ...(rules.length ? { rules } : {}),
           ...(text ? { text } : {}),
         },
-        { command, reminders, textBytes: Buffer.byteLength(joined, "utf8") },
+        { command, reminders, textBytes: Buffer.byteLength(joined, "utf8"), detailText: clip(joined, FULL_LABEL_LEN) },
       );
     }
     if (typeof content === "string") {
@@ -236,7 +236,7 @@ export function parseLine(raw: string, slug: string, sub?: SubagentPath): ParseR
           ...(rules.length ? { rules } : {}),
           text: s,
         },
-        { command, reminders, textBytes: Buffer.byteLength(content, "utf8") },
+        { command, reminders, textBytes: Buffer.byteLength(content, "utf8"), detailText: clip(content, FULL_LABEL_LEN) },
       );
     }
     return null;
